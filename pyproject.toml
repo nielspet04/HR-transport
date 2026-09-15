@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hr-vervoerskosten"
+version = "0.1.0"
+description = "Traceerbare verwerking van vervoersvergoedingen voor bewakingsagenten."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openpyxl>=3.1,<4",
+    "pypdf>=5,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+

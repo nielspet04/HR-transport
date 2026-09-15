@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+
+# HR source data and generated artifacts
+data/input/*
+data/output/*
+!data/input/.gitkeep
+!data/output/.gitkeep
+*.xlsx
+*.xls
+*.csv
+*.tsv
+data/**/*.json
+
+# Temporary analysis files
+work/
