@@ -19,7 +19,7 @@ def key(value):
 
 def configuration_digest(config):
     values={k:config.get(k,[]) for k in ('workers','routes','versions','employee_links','location_links','car_tariffs')}
-    values['calculation_policy']='phase6-start-only-separate-48h-v3'
+    values['calculation_policy']='phase6-start-only-separate-48h-default-car-v4'
     return sha256(json.dumps(values,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 

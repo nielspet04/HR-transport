@@ -55,7 +55,7 @@ def run(store):
                 (status,json.dumps(result),now if status=='CONFIRMED' else None,'Automatisch: alleen exacte/hoge adresmatch bevestigd',digest))
             db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',(now,'Automatische geocodering',json.dumps({'address_hash':digest,'status':status})))
         counts['geocoded']+=1;counts['errors']+=status in ('ERROR','NO_MATCH','REVIEW');report(store,'RUNNING',counts)
-    with store.connect() as db:latest=db.execute('SELECT id FROM matching_runs ORDER BY id DESC LIMIT 1').fetchone()
+    with store.connect() as db:latest=db.execute('SELECT id FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC LIMIT 1').fetchone()
     if latest and enabled(store):
         # Refresh identities/modes after additions; this never calls Mapbox itself.
         with store.connect() as db:
@@ -63,19 +63,21 @@ def run(store):
             payload=json.loads(db.execute('SELECT payload FROM matching_runs WHERE id=?',(latest['id'],)).fetchone()[0])
             stale=payload['configuration_digest']!=configuration_digest(store.matching_config(db))
         if stale:
-            store._apply('matching_refresh',{'run_id':latest['id']},store.snapshot()['revision'])
-            with store.connect() as db:latest=db.execute('SELECT id FROM matching_runs ORDER BY id DESC LIMIT 1').fetchone()
+            with store.connect() as db:revision=db.execute('SELECT revision FROM meta').fetchone()[0]
+            store._apply('matching_refresh',{'run_id':latest['id']},revision)
+            with store.connect() as db:latest=db.execute('SELECT id FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC LIMIT 1').fetchone()
         prepared=store.get_route_plan(latest['id'])
         for item in prepared['routes']:
             if not enabled(store):break
             if item['cached']:continue
-            routing.request_one(store,{'run_id':latest['id'],'cache_key':item['cache_key'],'consent':True},store.snapshot()['revision'])
+            with store.connect() as db:revision=db.execute('SELECT revision FROM meta').fetchone()[0]
+            routing.request_one(store,{'run_id':latest['id'],'cache_key':item['cache_key'],'consent':True},revision)
             counts['routes']+=1
             with store.connect() as db:status=db.execute('SELECT status FROM route_distances WHERE cache_key=?',(item['cache_key'],)).fetchone()[0]
             counts['errors']+=status!='READY';report(store,'RUNNING',counts)
         counts['blocked_movements']=len(prepared['blocked'])
     with store.connect() as db:
-        counts['attention_results']=db.execute("SELECT count(*) FROM address_geocodes WHERE status IN ('PENDING','ERROR','NO_MATCH','REVIEW')").fetchone()[0]+db.execute("SELECT count(*) FROM route_distances WHERE status IN ('PENDING','ERROR')").fetchone()[0]
+        counts['attention_results']=sum(r['status'] in ('PENDING','ERROR','NO_MATCH') or r['status']=='REVIEW' and json.loads(r['result']).get('automatic_review_required',False) for r in db.execute('SELECT status,result FROM address_geocodes'))+db.execute("SELECT count(*) FROM route_distances WHERE status IN ('PENDING','ERROR')").fetchone()[0]
     report(store,'DONE' if enabled(store) else 'STOPPED',counts);return counts
 
 

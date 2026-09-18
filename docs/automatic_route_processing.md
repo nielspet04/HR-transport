@@ -8,7 +8,14 @@ Na Planet-upload, koppeling, route-/werknemerwijziging en het opslaan van een
 woonadres of locatieadres start een achtergrondtaak. Ook bij serverstart wordt
 op ontbrekende resultaten gecontroleerd. De lokale token blijft op de server.
 Alleen Belgische opgeslagen adressen worden verwerkt; onbekende adressen,
-werknemerskoppelingen en vervoerswijzen worden niet geraden.
+werknemerskoppelingen worden niet geraden. Bij een bevestigde werknemer en
+bevestigde fysieke locatie zonder enige bestaande vervoersinstelling wordt
+de afgesproken standaard **Privé auto** opgeslagen vanaf de eerste behouden
+prestatiedatum in de actieve bronmaanden. De km blijven leeg tot Mapbox een
+route heeft geleverd. Bestaande vervoerinstellingen (ook fiets, trein of een
+toekomstige versie) worden niet aangevuld of overschreven. De automatische
+toevoeging heeft een auditregel; alle maanden krijgen dezelfde bijgewerkte
+configuratiesnapshot. Uitgesloten maanden tellen niet mee.
 
 1. Permanente geocodering één keer per adres-hash. PENDING wordt vóór de API
    vastgelegd. Exacte/hoge matches met gematchte straat, huisnummer en postcode

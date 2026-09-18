@@ -140,14 +140,18 @@ def apply(store, action, data, revision):
             result = json.loads(old['result'])
             if type(data.get('accept')) is not bool:
                 raise ValueError('Kies bevestigen of afwijzen.')
-            if data['accept'] and not result.get('eligible'):
+            if data['accept'] and not result.get('eligible') and data.get('confirm_uncertain') is not True:
                 raise ValueError('Deze match is onvoldoende precies. Corrigeer het bronadres.')
+            if data['accept']:
+                import math
+                lon=result.get('longitude');lat=result.get('latitude')
+                if any(type(v) not in (int,float) or not math.isfinite(v) for v in (lon,lat)) or not (-180<=lon<=180 and -90<=lat<=90):raise ValueError('Geen geldige coördinaten; corrigeer het adres.')
             db.execute('UPDATE address_geocodes SET status=?,reviewed_at=?,reason=? WHERE id=?',
                        ('CONFIRMED' if data['accept'] else 'REJECTED', now, reason, old['id']))
         else:
             raise ValueError('Onbekende geocodingactie.')
         db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',
-                   (now, 'Mapbox-geocodering: ' + action, json.dumps({'action': action, 'address_id': address_id})))
+                   (now, 'Mapbox-geocodering: ' + action, json.dumps({'action': action, 'address_id': address_id,'confirm_uncertain':data.get('confirm_uncertain') is True})))
 
 
 def enrich(db, addresses):

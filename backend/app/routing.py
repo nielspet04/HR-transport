@@ -55,10 +55,13 @@ def plan(db, config, run_id):
     if not selected:
         raise ValueError('Selecteer een opgeslagen exportverwerking.')
     seed = json.loads(selected['payload']); source = seed['source_sha256']
+    excluded_months={r['month'] for r in db.execute('SELECT month FROM excluded_months')}
+    if seed['month'] in excluded_months:raise ValueError('Deze maand is uitgesloten van verwerking.')
     months = {}
     # Latest snapshot per month for this exact uploaded source.
     for row in db.execute('SELECT payload FROM matching_runs ORDER BY id DESC'):
         payload = json.loads(row['payload'])
+        if payload['month'] in excluded_months:continue
         if payload.get('source_sha256') == source and payload['month'] not in months:
             months[payload['month']] = payload
     if any(p['configuration_digest'] != configuration_digest(config) for p in months.values()):

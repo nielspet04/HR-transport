@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS corrections(id INTEGER PRIMARY KEY,version_id INTEGER
 CREATE TABLE IF NOT EXISTS matching_employee_links(planet_id TEXT PRIMARY KEY,worker_id INTEGER NOT NULL REFERENCES workers(id),source_keys TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS matching_location_links(customer TEXT PRIMARY KEY,location TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS matching_runs(id INTEGER PRIMARY KEY,month TEXT NOT NULL,created_at TEXT NOT NULL,source_path TEXT NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS excluded_months(month TEXT PRIMARY KEY,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS matching_audit(id INTEGER PRIMARY KEY,changed_at TEXT NOT NULL,reason TEXT NOT NULL,details TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS car_tariffs(id INTEGER PRIMARY KEY,valid_from TEXT NOT NULL,data TEXT NOT NULL,source TEXT NOT NULL,reason TEXT NOT NULL,changed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS special_car_tariffs(id INTEGER PRIMARY KEY,valid_from TEXT NOT NULL,data TEXT NOT NULL,source TEXT NOT NULL,reason TEXT NOT NULL,changed_at TEXT NOT NULL);
@@ -74,13 +75,14 @@ class RouteStore(Store):
         return db.execute('SELECT id FROM workers WHERE name_key=?',(norm(name),)).fetchone()[0]
 
     @staticmethod
-    def version(db,route,start,kms,reason,raw=None,allow_missing=False):
+    def version(db,route,start,kms,reason,raw=None,allow_missing=False,allow_historical=False):
         start=valid_day(start);reason=required(reason)
         if type(route) is not int or not db.execute('SELECT 1 FROM routes WHERE id=?',(route,)).fetchone():raise ValueError('Onbekende route.')
         if not km_applicable(db.execute('SELECT mode FROM routes WHERE id=?',(route,)).fetchone()[0]):kms=None;raw=None
         elif kms is None and not allow_missing:distance(kms)
         last=db.execute('SELECT max(valid_from) FROM versions WHERE route_id=?',(route,)).fetchone()[0]
-        if last and start<last:raise ValueError('Kies de laatste ingangsdatum of een latere datum; oudere versies blijven bewaard.')
+        if last and start<last and not allow_historical:raise ValueError('Kies de laatste ingangsdatum of een latere datum; oudere versies blijven bewaard.')
+        if allow_historical and db.execute('SELECT 1 FROM versions WHERE route_id=? AND valid_from=?',(route,start)).fetchone():raise ValueError('Op deze datum bestaat al een versie; kies een andere datum.')
         if last==start:
             previous=db.execute('SELECT * FROM versions WHERE route_id=? AND valid_from=?',(route,start)).fetchone()
             now=datetime.now(timezone.utc).isoformat()
@@ -139,7 +141,7 @@ class RouteStore(Store):
             from app.automatic_routes import trigger
             trigger(self);return
         result=self._apply(action,data,revision)
-        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','address_save','address_link','location_address_save','route_add','worker_rename','geocode_review','geocode_review_many'):
+        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many'):
             from app.automatic_routes import trigger
             trigger(self)
         return result
@@ -208,6 +210,13 @@ class RouteStore(Store):
                 self.version(db,route,data.get('valid_from'),data.get('kms'),data.get('reason'))
             elif action=='route_update':
                 self.version(db,data.get('route_id'),data.get('valid_from'),data.get('kms'),data.get('reason'))
+            elif action=='route_historical':
+                if data.get('confirm') is not True:raise ValueError('Bevestig de vervoerswijze voor deze eerdere periode.')
+                route=db.execute('SELECT * FROM routes WHERE id=?',(data.get('route_id'),)).fetchone()
+                if not route:raise ValueError('Onbekende route.')
+                self.version(db,route['id'],data.get('valid_from'),None,data.get('reason'),allow_missing=True,allow_historical=True)
+                db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',
+                    (datetime.now(timezone.utc).isoformat(),required(data.get('reason')),json.dumps({'action':action,'route_id':route['id'],'valid_from':data.get('valid_from')})))
             elif action=='worker_move':
                 updates=data.get('updates')
                 if not isinstance(updates,list) or not updates or any(not isinstance(u,dict) for u in updates):raise ValueError('Vul alle routes in.')
@@ -230,12 +239,18 @@ class RouteStore(Store):
             addresses=address_snapshot(db)
             enrich(db,addresses['addresses'])
             from .location_addresses import snapshot as location_snapshot
-            latest=db.execute('SELECT id,payload FROM matching_runs ORDER BY id DESC LIMIT 1').fetchone()
+            latest=db.execute('SELECT id,payload FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC LIMIT 1').fetchone()
+            issues=[];issue_warning=None
+            if latest:
+                from app.routing import plan
+                try:issues=plan(db,matching_config,latest['id'])['blocked']
+                except ValueError as error:issue_warning=str(error)
             from app.location_transfers import overview as transfer_overview
             return {'view':'routes','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**addresses,**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
                 'route_distances':cached_distances(db),
+                'route_issues':issues,'route_issue_warning':issue_warning,
                 'location_transfers':transfer_overview(db,matching_config),
-                'matching_runs':[dict(r) for r in db.execute('SELECT id,month,created_at FROM matching_runs ORDER BY id DESC')],
+                'matching_runs':[{'id':r['id'],'month':r['month'],'created_at':r['created_at'],'source_sha256':json.loads(r['payload']).get('source_sha256')} for r in db.execute('SELECT id,month,created_at,payload FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC')],
                 'matching':self.matching_payload(latest,matching_config,db) if latest else None}
 
     @staticmethod
@@ -271,11 +286,15 @@ class RouteStore(Store):
             from app.cached_calculation import calculate_cached_month
             payload['calculation']=calculate_cached_month(db,config,row['id'],payload)
             payload['movements']=payload['calculation'].pop('resolved_movements')
+        if db is not None:
+            from app.routing import plan
+            try:payload['route_issues']=[issue for issue in plan(db,config,row['id'])['blocked'] if issue['day'].startswith(payload['month'])]
+            except ValueError as error:payload['route_issue_warning']=str(error)
         return {**payload,'run_id':row['id'],'stale':payload['configuration_digest']!=configuration_digest(config)}
 
     def get_matching(self,run_id):
         with self.connect() as db:
-            row=db.execute('SELECT id,payload FROM matching_runs WHERE id=?',(run_id,)).fetchone()
+            row=db.execute('SELECT id,payload FROM matching_runs WHERE id=? AND month NOT IN (SELECT month FROM excluded_months)',(run_id,)).fetchone()
             if not row:raise ValueError('Onbekende maandverwerking.')
             return self.matching_payload(row,self.matching_config(db),db)
 
@@ -326,10 +345,20 @@ class RouteStore(Store):
         if imported.has_errors:raise ValueError('Los de Pl@net-importfouten eerst op; geen maanden opgeslagen.')
         if not imported.report.months:raise ValueError('Geen shiften gevonden in het bronbestand.')
         config=self.matching_config(db);results=[]
+        excluded={r['month'] for r in db.execute('SELECT month FROM excluded_months')}
+        selected_imports=[]
         for month in imported.report.months:
+            if month in excluded:continue
             shifts=tuple(s for s in imported.shifts if s.day.strftime('%Y-%m')==month)
             selected=replace(imported,shifts=shifts,report=replace(imported.report,
                 selected_month=month,imported_rows=len(shifts),outside_month_rows=len(imported.shifts)-len(shifts)))
+            selected_imports.append(selected)
+        location_config=Path(__file__).resolve().parents[3]/'config/locations.toml'
+        from app.default_transport import seed
+        seed(self,db,[match_import(selected,config,location_config) for selected in selected_imports])
+        config=self.matching_config(db)
+        for selected in selected_imports:
+            month=selected.report.selected_month
             payload=match_import(selected,config,Path(__file__).resolve().parents[3]/'config/locations.toml')
             results.append({'month':month,'run_id':self.insert_matching(db,payload,source),'summary':payload['summary']})
         return results

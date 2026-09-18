@@ -63,7 +63,7 @@ def export_rows(store, run_id):
         payloads={}
         for row in db.execute('SELECT payload FROM matching_runs ORDER BY id DESC'):
             p=json.loads(row['payload'])
-            if p.get('source_sha256')==prepared['source_sha256']:payloads.setdefault(p['month'],p)
+            if p.get('source_sha256')==prepared['source_sha256'] and p['month'] in prepared['months']:payloads.setdefault(p['month'],p)
         shift_rows=[]
         for month,p in sorted(payloads.items()):
             agents={a['planet_id']:a for a in p['agents']}
