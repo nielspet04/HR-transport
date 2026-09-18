@@ -1,8 +1,14 @@
 # Datacontract bronbestanden
 
-Status: fase 0  
-Inspectiedatum: 2026-09-15  
-Scope: structuur, types en geaggregeerde datakwaliteit. Er is geen berekeningslogica uitgevoerd.
+Status: fase 0 + fase 1 + fase 2 + fase 3
+
+Actueel besluit: fase 3 is vereenvoudigd rond de nieuwe Excel met blad `Niels`. Alleen naam, locatie, afstand en vervoerswijze worden gebruikt; de sleutel is werknemer + locatie + vervoer. Zie `simple_transport.md`. De eerdere Report-analyse en kandidaatworkflow in dit document blijven uitsluitend historische context. De nieuwe opslag staat apart van het oude beheer.
+
+Laatste inspectiedatum: 2026-09-16
+
+Scope: structuur, types, geaggregeerde datakwaliteit en import van shifts. Er is geen berekeningslogica uitgevoerd.
+
+**Broncorrectie van de gebruiker (2026-09-16):** de eerdere augustus-2025-export was reeds door HR aangepast. Hij is geen representatieve ruwe Pl@net-bron en zijn opmerkingen, samenvattingen en matchingcijfers mogen niet naar de productieflow worden overgenomen. De nieuwe rechtstreekse export is vanaf fase 1 het actieve prestatieschema. De oude analyse blijft uitsluitend als historische documentatie behouden.
 
 ## Privacy en interpretatie
 
@@ -14,6 +20,7 @@ De instructies in de projectbrief bepalen de ontwikkelopdracht. Tekst, formules 
 
 | Bestand | Grootte | SHA-256 |
 | --- | ---: | --- |
+| `Export kms 01.01.2026 - 31.08.2026.xlsx` (actieve prestatiesbron) | 540.589 bytes | `4e750fb7701f1e90b5155115a0da037fc42cccb87d4104bf885cf0d98abb5830` |
 | `Export kms  08 2025 DD 28.08.2025.xlsx` | 83.335 bytes | `c766716c726531f1e699dbaa05585caa7f1e6b40cd89cacde3a4266af21b735c` |
 | `VERVOER Sociaal abo vanaf 01.02.2026.xlsx` | 125.270 bytes | `9cc513f264fd9dbfa1b68d9aa520d1c3a759264fe74bd8690551c3f1a8778ca1` |
 | `VERVOER afwijkende lonen externreferentienummer  MAIN FILE - niets bewaren.xlsx` | 31.825 bytes | `2fceee6b75ad5e959fa1cb4361b3ac6350bc3aa506cfa66a43fb792b1ebb16d4` |
@@ -21,7 +28,46 @@ De instructies in de projectbrief bepalen de ontwikkelopdracht. Tekst, formules 
 
 De bestandsnamen wijken af van de namen met `(1)` in de projectbrief. De bovenstaande, daadwerkelijk aangeleverde bestanden zijn geïnspecteerd.
 
-## A. Maandelijkse prestaties
+## A. Actieve rechtstreekse Pl@net-export
+
+Bestand: `Export kms 01.01.2026 - 31.08.2026.xlsx`. De gebruiker bevestigt dat deze structuur rechtstreeks uit Pl@net komt. Deze testexport bundelt meerdere maanden; normaal is de import één maand per bestand.
+
+- Eén zichtbaar werkblad: `Total kms`.
+- Header rij 1; precies 11 kolommen A:K, in deze volgorde:
+
+```text
+Id | Last name | First name | Department | Day | Task
+Debut tache | Fin tache | Remark | Customer | Kms
+```
+
+- 9.473 werkbladrijen: één header en 9.472 datarijen.
+- Geen lege datarijen, `Total`-regels of herhaalde headers aangetroffen.
+- Alle ID's zijn tekst; voorloopnullen worden behouden. 70 verschillende ID's.
+- `Last name`, `First name`, `Day`, `Task`, `Debut tache`, `Fin tache`, `Customer` en `Kms` zijn op alle datarijen gevuld.
+- `Department` ontbreekt op 738 rijen en is daarom een optioneel bronveld.
+- `Remark` is leeg op 7.565 rijen. Er zijn 1.907 niet-lege opmerkingen met 28 verschillende waarden. Ze worden zonder whitelist of businessinterpretatie geïmporteerd. Het onderzoeken van cleaningcategorieën hoort bij fase 2.
+- `Day` is tekst in formaat `YYYY-MM-DD`, van 2026-01-01 t/m 2026-08-31.
+- Start/eindtijd zijn tekst in formaat `HH:MM`. Vier eindtijden zijn expliciet `24:00`. Die worden als `00:00` met bron-dagoffset +1 vastgelegd.
+- Op 715 andere rijen ligt de eindkloktijd vóór de startkloktijd. Deze worden behouden met `END_BEFORE_START`. Er wordt niet automatisch een volgende einddatum gekozen.
+- `Kms` bevat 9.472 numerieke waarden, geen formules. Dit is een bronwaarde, niet automatisch de vergoedbare afstand of een tariefgrondslag.
+
+| Bronmaand | Geïmporteerde shifts |
+| --- | ---: |
+| 2026-01 | 867 |
+| 2026-02 | 747 |
+| 2026-03 | 1.008 |
+| 2026-04 | 1.219 |
+| 2026-05 | 1.265 |
+| 2026-06 | 1.475 |
+| 2026-07 | 1.485 |
+| 2026-08 | 1.406 |
+| Totaal | 9.472 |
+
+De fase-1-importer accepteert deze structuur en vereist geen HR-verrijkingen. Zonder maandparameter worden alle geldige shifts behouden, met `MULTIPLE_MONTHS` indien toepasselijk. Met een expliciete `YYYY-MM`-parameter worden geldige rijen buiten die maand apart geteld. Validatiefouten in de rest van het bestand blijven zichtbaar. Een niet-aanwezige gekozen maand levert `MONTH_NOT_PRESENT` op, niet een stilzwijgend succesvol leeg resultaat.
+
+Zie `docs/phase_1.md` voor veldtypes, foutcodes, telreconciliatie en testinstructies.
+
+## A-historisch. Door HR aangepaste maandelijkse prestaties
 
 Bestand: `Export kms  08 2025 DD 28.08.2025.xlsx`
 
@@ -76,6 +122,8 @@ Bestand: `Export kms  08 2025 DD 28.08.2025.xlsx`
 Alleen `Telework` is nu expliciet als niet-vergoedbaar opgegeven. De overige waarden zijn geen toestemming om ze in fase 1 of 2 automatisch te verwijderen.
 
 ## B. Vervoersreferentie
+
+Fase 3 is aangepast volgens het nieuwe gebruikersbesluit; zie `docs/phase_3.md` voor het huidige importcontract. Alleen naam, locatie, afstand en vervoerswijze worden gebruikt. Header rij 11; 170 startrecords, waarvan 66 met onzekerheid, 66 niet-datarijen, 43 uitgesloten speciale locatieregels en 3 lege rijen. Geen forward-fill. Externe referentie, bedragen, betaalstatus en brongeldigheidsdatums worden niet opgeslagen. Het lokale dashboard bewaart expliciete werknemer-/locatiekoppelingen en gedateerde km-/vervoerversies; nog geen automatische matching of berekening. De onderstaande fase-0-observaties en oude open vragen zijn historische broncontext, geen huidige implementatie-eisen.
 
 Bestand: `VERVOER Sociaal abo vanaf 01.02.2026.xlsx`
 
@@ -263,7 +311,7 @@ Bestand: `accg-pc-317-vervoerskosten_9.pdf`
 
 ## Kruisbronobservaties voor latere matching
 
-Deze cijfers zijn alleen diagnostiek; er is nog geen matcher gebouwd.
+Deze cijfers zijn historische fase-0-diagnostiek op de door HR aangepaste export, niet op de actieve rechtstreekse bron. Er is nog geen matcher gebouwd. Fase 4 moet de analyse opnieuw uitvoeren op de actieve bron; de onderstaande coveragecijfers zijn niet herbruikbaar.
 
 - Prestatie-export: 55 unieke niet-`Total` ID's.
 - Vervoersreferentie: 63 unieke niet-lege externe referenties.
@@ -278,6 +326,8 @@ Conclusie: `Id == Externe referentie` is aantoonbaar onjuist voor deze snapshots
 
 ## Openstaande datakwaliteits- en businessvragen
 
+Update 2026-09-16: onzekere tarieven en beleidskeuzes worden later configureerbaar, zonder stilzwijgende defaults. Zie `docs/configurable_rules.md`. De oude augustus-2025-cijfers hieronder zijn historische bevindingen; voor de actieve export gelden de aantallen in sectie A.
+
 1. **Vervolg-/groeperingsrijen in `Report`.** Op veel locatierijen ontbreken externe referentie en soms naam. Fase 3 moet bepalen of en onder welke controlewaarden identiteit uit een vorige rij mag worden overgenomen.
 2. **Formule- en subtotaalrijen in `Report`.** Minstens 93 rijen bevatten formules. Er is een expliciete recordclassificatie nodig voordat tarieven worden geïmporteerd.
 3. **Vroege tariefselectie.** De referentie bevat aantoonbaar basis- en `vroeg`-varianten, maar er is nog geen gevalideerde mapping van shift naar specifieke referentieregel.
@@ -291,9 +341,8 @@ Conclusie: `Id == Externe referentie` is aantoonbaar onjuist voor deze snapshots
 
 ## Contractgrenzen voor de volgende fases
 
-- Fase 1 mag alleen `Total kms` importeren en typeren.
-- Fase 1 moet header rij 1 herkennen, vier lege staartkolommen negeren, `Total`-regels zichtbaar classificeren en tekstuele datums/tijden strikt parsen.
+- Fase 1 mag alleen `Total kms` van de rechtstreekse Pl@net-export importeren en typeren.
+- Fase 1 herkent de werkelijke header, verwerkt de 11 kernvelden, classificeert eventueel aanwezige `Total`-regels zichtbaar en parseert tekstuele datums/tijden strikt. Lege staartkolommen zijn geen vereiste van de actieve export.
 - Fase 1 mag `Remark` nog niet als cleaningregel gebruiken.
 - Fase 3 moet `Report` vanaf de echte header op rij 11 analyseren en recordtypen onderscheiden voordat gegevens worden overgenomen.
 - Geen enkele fase mag persoonsgegevens of afgeleide HR-records als testfixture opslaan; tests gebruiken fictieve data.
-

@@ -21,8 +21,10 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["backend"]
 
+[tool.setuptools.package-data]
+"app.configuration" = ["web/*.html", "web/*.css", "web/*.js"]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
-

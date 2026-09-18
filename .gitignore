@@ -12,6 +12,7 @@ htmlcov/
 .idea/
 
 # HR source data and generated artifacts
+outputs/
 data/input/*
 data/output/*
 !data/input/.gitkeep
@@ -21,6 +22,11 @@ data/output/*
 *.csv
 *.tsv
 data/**/*.json
+data/state/
+*.sqlite3
+*.sqlite3-*
 
 # Temporary analysis files
 work/
+.env
+.env.*

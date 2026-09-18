@@ -1,0 +1,22 @@
+# Confirmed physical locations only. Keep historical periods; no HR records.
+version = "airport-v2"
+
+[[locations]]
+customer = "DELTA AIRLINES"
+location = "LUCHTHAVEN"
+
+[[locations]]
+customer = "HAINAN AIRLINES"
+location = "LUCHTHAVEN"
+
+[[locations]]
+customer = "LATAM CARGO"
+location = "LUCHTHAVEN"
+
+[[locations]]
+customer = "TUI"
+location = "LUCHTHAVEN"
+
+[[locations]]
+customer = "ICTS BELGIUM BVBA"
+location = "LUCHTHAVEN"
