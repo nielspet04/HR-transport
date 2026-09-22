@@ -39,6 +39,14 @@ def test_auto_default_cached_not_manual_train_or_bike(tmp_path,monkeypatch):
     assert store.get_matching(run)['calculation']['rows'][0]['amount']=='7.38'
 
 
+def test_payroll_ready_requires_month_and_external_reference(tmp_path,monkeypatch):
+    from app.configuration.external_references import append_reference
+    store,run,p,wid=setup_case(tmp_path,monkeypatch)
+    assert not store.get_matching(run)['calculation']['payroll_ready']
+    with store.transaction() as db:append_reference(db,wid,'2026-01-01','00123','Test')
+    assert store.get_matching(run)['calculation']['payroll_ready']
+
+
 def test_hr_override_recalculates_and_reset(tmp_path,monkeypatch):
     store,run,p,wid=setup_case(tmp_path,monkeypatch)
     data={'route_id':store.snapshot()['route_distances'][0]['id'],'worker_id':wid,'kms':10,'reason':'HR gecontroleerd'}

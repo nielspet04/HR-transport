@@ -153,13 +153,19 @@ class RouteStore(Store):
             from app.automatic_routes import trigger
             trigger(self);return
         result=self._apply(action,data,revision)
-        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','transport_default'):
+        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','employee_onboard','customer_onboard','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','transport_default'):
             from app.automatic_routes import trigger
             trigger(self)
         return result
 
     def _apply(self,action,data,revision):
         if type(revision) is not int:raise ValueError('Vernieuw eerst het scherm.')
+        if action=='employee_onboard':
+            from app.employee_onboarding import onboard
+            return onboard(self,data,revision)
+        if action=='customer_onboard':
+            from app.customer_onboarding import onboard
+            return onboard(self,data,revision)
         if action=='location_transfer_override':
             from app.location_transfers import correct
             return correct(self,data,revision)
@@ -279,7 +285,7 @@ class RouteStore(Store):
                 try:issues=plan(db,matching_config,latest['id'])['blocked']
                 except ValueError as error:issue_warning=str(error)
             from app.location_transfers import overview as transfer_overview
-            return {'view':'routes','app_version':'phase9-monthly-v1','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**external_reference_snapshot(db),**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
+            return {'view':'routes','app_version':'phase10-acerta-fixed-template-v1','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**external_reference_snapshot(db),**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
                 'route_distances':cached_distances(db),
                 'route_issues':issues,'route_issue_warning':issue_warning,
                 'location_transfers':transfer_overview(db,matching_config),

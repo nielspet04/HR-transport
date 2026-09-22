@@ -85,6 +85,10 @@ def make_server(store,port=8765):
                 if size<=0 or size>limit:return self.reply(413,'{"error":"Bestand of verzoek te groot."}')
                 payload=json.loads(self.rfile.read(size))
                 if not isinstance(payload,dict):raise ValueError('Ongeldig verzoek.')
+                if self.path=='/api/payroll/export':
+                    from app.payroll_export import workbook_bytes
+                    result,month=workbook_bytes(store,payload.get('run_id'))
+                    return self.reply(200,result,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',f'VERVOER-AFWIJKENDE-LONEN-{month}.xlsx')
                 if not self.path.startswith('/api/action/'):return self.reply(404,'{}')
                 action=self.path.removeprefix('/api/action/')
                 if not isinstance(payload.get('data'),dict):raise ValueError('Ongeldige invoer.')

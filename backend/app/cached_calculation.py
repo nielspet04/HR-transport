@@ -106,5 +106,6 @@ def calculate_cached_month(db,config,run_id,payload):
     from app.configuration.external_references import enrich_monthly
     enrich_monthly(db,payload,monthly)
     return {'rows':results,'resolved_movements':movements,'statuses':dict(Counter(r['status'] for r in results)),
-            'monthly':monthly,'payroll_ready':False,'distance_policy':'cached-route-with-hr-override-ceil-auto-default',
-        'warning':'Controleberekening per gekozen vervoer. Fiets gebruikt uitsluitend het gewone gedateerde fietstarief, heen en terug, zonder vroeg/laat- of 48h-toeslag. Overlap/onzekere volgorde blokkeert. Weekmaximum volgt. Geen uitbetalingsbestand.'}
+            'monthly':monthly,'payroll_ready':monthly['ready'] and monthly['external_references_ready'],
+            'distance_policy':'cached-route-with-hr-override-ceil-auto-default',
+        'warning':'Controleberekening per gekozen vervoer. Fiets gebruikt uitsluitend het gewone gedateerde fietstarief, heen en terug, zonder vroeg/laat- of 48h-toeslag. Overlap, onzekere volgorde, ontbrekende berekeningen en ontbrekende loonnummers blokkeren de Accerta-export.'}

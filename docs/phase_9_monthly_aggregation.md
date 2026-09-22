@@ -17,8 +17,8 @@ Een HR-bedragscorrectie telt met haar actieve bedrag mee; het oorspronkelijke
 bedrag en de historie blijven in de berekeningsdetails aanwezig.
 
 Het dashboard toont de maandtabel en kan rechtstreeks naar alle details of de
-blokkeringen van één werknemer springen. `monthly.ready` betekent uitsluitend
-dat iedere beweging rekenkundig berekend of terecht uitgesloten is. Het is nog
-geen loonexport en zet `payroll_ready` niet op true: weekmaximum en eventuele
-overige eindregels moeten eerst expliciet worden bevestigd. Fase 12 inspecteert
-opnieuw het exacte Acerta-template en maakt altijd een nieuw bestand.
+blokkeringen van één werknemer springen. `monthly.ready` betekent dat iedere
+beweging rekenkundig berekend of terecht uitgesloten is. `payroll_ready` wordt
+pas waar wanneer daarnaast iedere werknemer de hele maand één eenduidig extern
+loonnummer heeft. De daaropvolgende officiële Accerta-export staat beschreven
+in `docs/acerta_export.md` en maakt altijd een nieuw bestand.

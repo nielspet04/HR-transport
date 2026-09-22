@@ -275,7 +275,7 @@ Einddatum (fractie)
 - `Manipulatiecode`, `Percentage`, `Bedrag`, `Dagen` en `Kostenplaats` zijn in alle 69 voorbeeldrijen leeg.
 - `Reden` is op 67 rijen gevuld, op 2 leeg en heeft één waarde met randspatie.
 
-Deze observaties beschrijven het voorbeeld en leggen nog niet vast welke velden de toekomstige exporter moet vullen. Dat wordt pas in fase 12 bepaald.
+Deze observaties waren de fase-0-inspectie. De inmiddels bevestigde exportvelden en looncodegroepering staan in `docs/acerta_export.md`.
 
 ### Werkblad `LIST NIET UITBETALEN `
 
