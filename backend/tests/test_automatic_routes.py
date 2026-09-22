@@ -55,7 +55,7 @@ def test_auto_transfers_saved_shared_correction_and_personal_priority(tmp_path,m
     assert calculate(store,run,p)['rows'][1]['distance']=='7'
     rid=transfer['cached']['id']
     store.apply('location_transfer_override',{'route_id':rid,'kms':10,'reason':'Verkeerde weg'},store.snapshot()['revision'])
-    assert calculate(store,run,p)['rows'][1]['amount']=='5.32'
+    assert calculate(store,run,p)['rows'][1]['amount']=='8.65'
     store.apply('route_distance_override',{'route_id':rid,'worker_id':wid,'kms':12,'reason':'Persoonlijk'},store.snapshot()['revision'])
     assert calculate(store,run,p)['rows'][1]['distance']=='12'
     store.apply('location_transfer_override',{'route_id':rid,'reset':True,'reason':'Herstellen'},store.snapshot()['revision'])

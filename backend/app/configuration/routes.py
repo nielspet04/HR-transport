@@ -53,6 +53,16 @@ class RouteStore(Store):
             db.executescript(AUTOMATIC_SCHEMA)
             from app.location_transfers import SCHEMA as TRANSFER_SCHEMA
             db.executescript(TRANSFER_SCHEMA)
+            from app.shift_transport import SCHEMA as SHIFT_TRANSPORT_SCHEMA
+            db.executescript(SHIFT_TRANSPORT_SCHEMA)
+            from app.transport_defaults import SCHEMA as TRANSPORT_DEFAULT_SCHEMA
+            db.executescript(TRANSPORT_DEFAULT_SCHEMA)
+            from app.calculation_corrections import SCHEMA as CALCULATION_CORRECTION_SCHEMA
+            db.executescript(CALCULATION_CORRECTION_SCHEMA)
+            if not db.execute('SELECT 1 FROM bicycle_tariffs LIMIT 1').fetchone():
+                db.execute('INSERT INTO bicycle_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
+                    ('2026-01-01','0.37','Projectbrief · fietsvergoeding €0,37/km',
+                     'Initiële configureerbare fietsvergoeding uit projectbrief',datetime.now(timezone.utc).isoformat()))
             from app.calculation import pdf_start_tariff,pdf_special_tariff
             if not db.execute('SELECT 1 FROM extra_shift_tariffs LIMIT 1').fetchone():
                 db.execute('INSERT INTO extra_shift_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
@@ -141,7 +151,7 @@ class RouteStore(Store):
             from app.automatic_routes import trigger
             trigger(self);return
         result=self._apply(action,data,revision)
-        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many'):
+        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','transport_default'):
             from app.automatic_routes import trigger
             trigger(self)
         return result
@@ -151,6 +161,15 @@ class RouteStore(Store):
         if action=='location_transfer_override':
             from app.location_transfers import correct
             return correct(self,data,revision)
+        if action=='shift_transport_choice':
+            from app.shift_transport import save
+            return save(self,data,revision)
+        if action=='transport_default':
+            from app.transport_defaults import save
+            return save(self,data,revision)
+        if action=='calculation_amount_correction':
+            from app.calculation_corrections import save
+            return save(self,data,revision)
         if action=='route_distance_override':
             from app.route_corrections import apply
             return apply(self,data,revision)
@@ -185,6 +204,13 @@ class RouteStore(Store):
                 last=db.execute('SELECT max(valid_from) FROM extra_shift_tariffs').fetchone()[0]
                 if start<last:raise ValueError('Kies de laatste tariefdatum of een latere datum.')
                 db.execute('INSERT INTO extra_shift_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
+                    (start,rate,'HR-configuratie',reason,datetime.now(timezone.utc).isoformat()))
+            elif action=='bicycle_tariff':
+                from app.calculation import validate_km_rate
+                start=valid_day(data.get('valid_from'));reason=required(data.get('reason'));rate=validate_km_rate(data.get('rate_per_km'))
+                last=db.execute('SELECT max(valid_from) FROM bicycle_tariffs').fetchone()[0]
+                if last and start<last:raise ValueError('Kies de laatste fietstariefdatum of een latere datum.')
+                db.execute('INSERT INTO bicycle_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
                     (start,rate,'HR-configuratie',reason,datetime.now(timezone.utc).isoformat()))
             elif action in ('car_tariff','special_car_tariff'):
                 from app.calculation import validate_tariff
@@ -234,6 +260,7 @@ class RouteStore(Store):
             from app.route_corrections import cached_distances
             from app.automatic_routes import state as automatic_state
             config={**config,'versions':[display_route(v) for v in config['versions']]}
+            from app.shift_transport import snapshot as shift_transport_snapshot
             from .addresses import snapshot as address_snapshot
             from app.geocoding import enrich, configured, bulk_plan
             addresses=address_snapshot(db)
@@ -246,7 +273,7 @@ class RouteStore(Store):
                 try:issues=plan(db,matching_config,latest['id'])['blocked']
                 except ValueError as error:issue_warning=str(error)
             from app.location_transfers import overview as transfer_overview
-            return {'view':'routes','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**addresses,**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
+            return {'view':'routes','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
                 'route_distances':cached_distances(db),
                 'route_issues':issues,'route_issue_warning':issue_warning,
                 'location_transfers':transfer_overview(db,matching_config),
@@ -259,6 +286,8 @@ class RouteStore(Store):
             'car_tariffs':[{**dict(r),'data':json.loads(r['data'])} for r in db.execute('SELECT * FROM car_tariffs ORDER BY id')],
             'special_car_tariffs':[{**dict(r),'data':json.loads(r['data'])} for r in db.execute('SELECT * FROM special_car_tariffs ORDER BY id')],
             'extra_shift_tariffs':[dict(r) for r in db.execute('SELECT * FROM extra_shift_tariffs ORDER BY id')],
+            'bicycle_tariffs':[dict(r) for r in db.execute('SELECT * FROM bicycle_tariffs ORDER BY id')],
+            'transport_defaults':[dict(r) for r in db.execute('SELECT * FROM transport_defaults ORDER BY id')],
             'employee_links':[dict(r) for r in db.execute('SELECT * FROM matching_employee_links ORDER BY planet_id')],
             'location_links':[dict(r) for r in db.execute('SELECT * FROM matching_location_links ORDER BY customer')]}
         excluded={r['id'] for r in config['routes'] if not km_applicable(r['mode'])}
@@ -283,10 +312,16 @@ class RouteStore(Store):
         if 'calculation' in payload and payload['configuration_digest']==configuration_digest(config):
             payload['calculation']=calculate_month(payload['movements'],config.get('car_tariffs',[]))
         if db is not None and 'calculation' in payload:
+            from app.shift_transport import choices as transport_choices
+            choice_map=transport_choices(db,payload)
+            for movement in payload['movements']:
+                movement['transport_choice']=choice_map.get(movement['id'])
             from app.cached_calculation import calculate_cached_month
             payload['calculation']=calculate_cached_month(db,config,row['id'],payload)
             payload['movements']=payload['calculation'].pop('resolved_movements')
         if db is not None:
+            from app.coverage import check
+            payload['coverage']=check(db,payload)
             from app.routing import plan
             try:payload['route_issues']=[issue for issue in plan(db,config,row['id'])['blocked'] if issue['day'].startswith(payload['month'])]
             except ValueError as error:payload['route_issue_warning']=str(error)

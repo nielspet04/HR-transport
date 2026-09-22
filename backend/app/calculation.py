@@ -74,6 +74,7 @@ def calculate_movement(movement,tariffs,special_tariffs=None,extra_shift_tariffs
     if cars and 'trein' in modes:return stop('BLOCKED','Auto én trein op dezelfde locatie: vervoerskeuze eerst bevestigen.')
     if not cars:
         if modes=={'trein'}:return stop('EXCLUDED_TRAIN','Trein: n.v.t.; geen kilometervergoeding.')
+        if modes=={'mob budget'}:return stop('EXCLUDED_MOBILITY_BUDGET','Mobiliteitsbudget: geen kilometervergoeding.')
         if not routes:return stop('BLOCKED','Geen vervoersroute geldig op de prestatiedatum.')
         return stop('LATER_PHASE','Geen gewone autoroute; vervoerswijze nog niet berekend.')
     if len(cars)!=1:return stop('BLOCKED','Meerdere autoroutes: geen willekeurige afstand kiezen.')

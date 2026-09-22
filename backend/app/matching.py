@@ -18,8 +18,8 @@ def key(value):
 
 
 def configuration_digest(config):
-    values={k:config.get(k,[]) for k in ('workers','routes','versions','employee_links','location_links','car_tariffs')}
-    values['calculation_policy']='phase6-start-only-separate-48h-default-car-v4'
+    values={k:config.get(k,[]) for k in ('workers','routes','versions','employee_links','location_links','car_tariffs','transport_defaults')}
+    values['calculation_policy']='phase6-start-only-separate-48h-default-car-coverage-v5'
     return sha256(json.dumps(values,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
@@ -101,9 +101,14 @@ def match_import(imported,config,location_config):
                 applicable=km_applicable(r['mode'])
                 from app.distances import whole_kms
                 available.append({'route_id':r['id'],'mode':r['mode'],'kms':str(whole_kms(v['kms'])) if applicable and v['kms'] is not None else None,'km_applicable':applicable,'valid_from':v['valid_from']})
+        from app.transport_defaults import effective as effective_transport
+        default=effective_transport(config.get('transport_defaults',[]),agent['worker_id'],location,first.day.isoformat()) if agent['worker_id'] is not None and location is not None else None
+        if default:
+            selected=[r for r in available if key(r['mode'])==key(default['mode'])]
+            available=selected or [{'route_id':None,'mode':default['mode'],'kms':None,'km_applicable':default['mode'] in ('Privé auto','Fiets'),'valid_from':default['valid_from']}]
         if agent['status']!='MATCHED':status=agent['status']
         elif location_status!='MATCHED':status=location_status
-        elif not route_ids:status='UNMATCHED_EMPLOYEE_LOCATION'
+        elif not route_ids and not default:status='UNMATCHED_EMPLOYEE_LOCATION'
         else:status='MATCHED'
         movements.append({'id':index,'planet_id':first.employee_id,'day':first.day.isoformat(),'source_location':m.physical_location,
             'location':location,'employee_status':agent['status'],'location_status':location_status,'status':status,
@@ -118,7 +123,11 @@ def match_import(imported,config,location_config):
         for s in m.source_shifts:
             locations[s.customer]={'customer':s.customer,'physical_location':m.physical_location,'reference_location':location,'status':location_status}
     report=cleaned.report
+    excluded_rows={r.shift.source_row for r in cleaned.removals if r.reason in ('GHOST_AGENT','TELEWORK','CONFIRMED_EXCLUDED_REMARK')}
+    # Duplicate source shifts remain evidence inside each physical movement.
+    source_manifest=[{'row':s.source_row,'planet_id':s.employee_id} for s in imported.shifts if s.source_row not in excluded_rows]
     return {'month':imported.report.selected_month,'created_at':datetime.now(timezone.utc).isoformat(),'source_sha256':imported.report.source_sha256,
+        'source_manifest':source_manifest,
         'calculation':calculate_month(movements,config.get('car_tariffs',[])),
         'configuration_digest':configuration_digest(config),'agents':list(agents.values()),'locations':sorted(locations.values(),key=lambda r:r['customer']),
         'movements':movements,'summary':{'agents':len(agents),'movements':len(movements),'source_shifts':sum(len(m.source_shifts) for m in cleaned.movements),

@@ -74,6 +74,8 @@ def plan(db, config, run_id):
     cached = {r['cache_key']:r for r in cached_distances(db)}
     needed = {}; blocked = []; excluded = 0
     for payload in months.values():
+        from app.shift_transport import choices as transport_choices
+        overrides=transport_choices(db,payload)
         from app.itinerary import itineraries
         journey=itineraries(payload)
         agents = {a['planet_id']:a for a in payload['agents']}
@@ -87,13 +89,17 @@ def plan(db, config, run_id):
             if movement['status'] != 'MATCHED':
                 blocked.append({**context,'reason':'Werknemer/locatie niet gekoppeld.'});continue
             routes = movement.get('routes', [])
+            choice=overrides.get(movement.get('id'))
+            if choice and choice['mode']!='DEFAULT':
+                routes=({'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein'}[choice['mode']],)
+                routes=[{'mode':routes[0]}]
             if not routes:
                 blocked.append({**context,'reason':'Geen vervoerswijze geldig op de prestatiedatum.'});continue
             for route in routes:
                 if from_location and any(profile(r['mode'])=='driving' for r in routes) and profile(route['mode'])!='driving':continue
                 mode = profile(route['mode'])
                 if mode is None:
-                    if norm(route['mode']) in ('trein','dienstwagen'):
+                    if norm(route['mode']) in ('trein','dienstwagen','mob budget'):
                         excluded += 1
                     else:
                         blocked.append({**context,'reason':'Onbekende vervoerswijze: '+route['mode']})

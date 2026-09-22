@@ -21,6 +21,8 @@ def seed(store,db,payloads):
             (wid,location,loc_key,'Privé auto','privé auto')).lastrowid
         reason='Automatische standaard privéauto voor nieuwe werknemer–locatiecombinatie'
         store.version(db,rid,day,None,reason,allow_missing=True)
+        db.execute('INSERT INTO transport_defaults(worker_id,location,location_key,mode,valid_from,reason,changed_at) VALUES(?,?,?,?,?,?,?)',
+            (wid,location,loc_key,'Privé auto',day,reason,datetime.now(timezone.utc).isoformat()))
         db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',
             (datetime.now(timezone.utc).isoformat(),reason,json.dumps({'worker_id':wid,'route_id':rid,'valid_from':day})))
     return len(needed)
