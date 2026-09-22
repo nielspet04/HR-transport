@@ -56,7 +56,7 @@ def test_bike_alternative_does_not_duplicate_car_amount_and_company_car_not_priv
     m=movement();m['routes'].append({'route_id':2,'mode':'Fiets','kms':'10','valid_from':'2026-02-01'})
     assert calculate_movement(m,[tariff()])['amount']=='7.11'
     m['routes'][0]['mode']='Dienstwagen'
-    assert calculate_movement(m,[tariff()])['status']=='LATER_PHASE'
+    result=calculate_movement(m,[tariff()]);assert result['status']=='EXCLUDED_COMPANY_CAR' and result['amount'] is None
 
 
 def test_ambiguous_cars_train_and_unmatched():

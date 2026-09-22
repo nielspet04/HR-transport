@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS bicycle_tariffs(
  id INTEGER PRIMARY KEY, valid_from TEXT NOT NULL, rate_per_km TEXT NOT NULL,
  source TEXT NOT NULL, reason TEXT NOT NULL, changed_at TEXT NOT NULL);
 '''
-MODES=('DEFAULT','AUTO','BIKE','TRAIN')
+MODES=('DEFAULT','AUTO','BIKE','TRAIN','COMPANY_CAR','MOBILITY_BUDGET')
 
 
 def movement_key(payload,movement):
@@ -30,7 +30,7 @@ def choices(db,payload):
 
 def save(store,data,revision):
     mode=data.get('mode');reason=data.get('reason')
-    if mode not in MODES:raise ValueError('Kies standaard, auto, fiets of trein.')
+    if mode not in MODES:raise ValueError('Kies standaard, auto, fiets, trein, dienstwagen of mobiliteitsbudget.')
     from app.configuration.store import required
     reason=required(reason)
     with store.transaction(revision) as db:

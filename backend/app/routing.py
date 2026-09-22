@@ -91,7 +91,7 @@ def plan(db, config, run_id):
             routes = movement.get('routes', [])
             choice=overrides.get(movement.get('id'))
             if choice and choice['mode']!='DEFAULT':
-                routes=({'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein'}[choice['mode']],)
+                routes=({'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein','COMPANY_CAR':'Dienstwagen','MOBILITY_BUDGET':'Mob budget'}[choice['mode']],)
                 routes=[{'mode':routes[0]}]
             if not routes:
                 blocked.append({**context,'reason':'Geen vervoerswijze geldig op de prestatiedatum.'});continue

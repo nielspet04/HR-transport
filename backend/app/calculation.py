@@ -69,7 +69,7 @@ def calculate_movement(movement,tariffs,special_tariffs=None,extra_shift_tariffs
         return {**result,'status':status,'reason':reason}
     if movement['status']!='MATCHED':return stop('BLOCKED','Naam- of locatiekoppeling eerst oplossen.')
     routes=movement['routes'];modes={mode_key(r['mode']) for r in routes}
-    if 'dienstwagen' in modes:return stop('LATER_PHASE','Bedrijfswagen: aparte regel in fase 7.')
+    if 'dienstwagen' in modes:return stop('EXCLUDED_COMPANY_CAR','Dienstwagen: geen kilometervergoeding.')
     cars=[r for r in routes if mode_key(r['mode']) in ('auto','privé auto')]
     if cars and 'trein' in modes:return stop('BLOCKED','Auto én trein op dezelfde locatie: vervoerskeuze eerst bevestigen.')
     if not cars:

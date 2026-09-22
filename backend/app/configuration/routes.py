@@ -41,6 +41,8 @@ class RouteStore(Store):
             db.executescript(SCHEMA)
             from .addresses import SCHEMA as ADDRESS_SCHEMA
             db.executescript(ADDRESS_SCHEMA)
+            from .external_references import SCHEMA as EXTERNAL_REFERENCE_SCHEMA
+            db.executescript(EXTERNAL_REFERENCE_SCHEMA)
             from app.geocoding import SCHEMA as GEOCODE_SCHEMA
             db.executescript(GEOCODE_SCHEMA)
             from .location_addresses import SCHEMA as LOCATION_ADDRESS_SCHEMA
@@ -198,6 +200,9 @@ class RouteStore(Store):
             elif action in ('address_save','address_link','address_ignore'):
                 from .addresses import apply
                 return apply(db,action,data)
+            elif action in ('external_reference_save','external_reference_link','external_reference_ignore'):
+                from .external_references import apply
+                return apply(db,action,data)
             elif action=='extra_shift_tariff':
                 from app.calculation import validate_km_rate
                 start=valid_day(data.get('valid_from'));reason=required(data.get('reason'));rate=validate_km_rate(data.get('rate_per_km'))
@@ -265,6 +270,7 @@ class RouteStore(Store):
             from app.geocoding import enrich, configured, bulk_plan
             addresses=address_snapshot(db)
             enrich(db,addresses['addresses'])
+            from .external_references import snapshot as external_reference_snapshot
             from .location_addresses import snapshot as location_snapshot
             latest=db.execute('SELECT id,payload FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC LIMIT 1').fetchone()
             issues=[];issue_warning=None
@@ -273,7 +279,7 @@ class RouteStore(Store):
                 try:issues=plan(db,matching_config,latest['id'])['blocked']
                 except ValueError as error:issue_warning=str(error)
             from app.location_transfers import overview as transfer_overview
-            return {'view':'routes','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
+            return {'view':'routes','app_version':'phase9-monthly-v1','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**external_reference_snapshot(db),**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
                 'route_distances':cached_distances(db),
                 'route_issues':issues,'route_issue_warning':issue_warning,
                 'location_transfers':transfer_overview(db,matching_config),

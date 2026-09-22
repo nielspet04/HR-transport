@@ -2,7 +2,7 @@
 
 De opgeslagen werknemer–locatieroute blijft de standaard. HR kan in het
 maandoverzicht één concrete, behouden beweging overschrijven met privéauto,
-fiets of trein. De sleutel bevat bronbestand, maand, werknemer, datum en
+fiets, trein, dienstwagen of mobiliteitsbudget. De sleutel bevat bronbestand, maand, werknemer, datum en
 bronregels; een herverwerking van dezelfde export verliest de keuze niet.
 Iedere wijziging is append-only opgeslagen in `shift_transport_choices` en
 heeft een verplichte reden. `DEFAULT` herstelt de standaard zonder historie te
@@ -17,6 +17,8 @@ geen kilometervergoeding op. Een individuele shiftkeuze gaat vóór deze
 standaard, zonder hem voor andere dagen te wijzigen.
 
 - Trein: zichtbaar, maar `EXCLUDED_TRAIN` en geen kilometervergoeding.
+- Dienstwagen: zichtbaar als `EXCLUDED_COMPANY_CAR`, geen kilometervergoeding.
+- Mobiliteitsbudget: zichtbaar als `EXCLUDED_MOBILITY_BUDGET`, geen kilometervergoeding.
 - Auto: de gedateerde Mapbox-autoroute en gewone/vroeg-laat/48h-autoregels.
 - Fiets: de gedateerde Mapbox-fietsroute, afstand naar boven afgerond,
   `enkele km × 2 × fietstarief`. Vroeg/laat en 48h worden nooit toegevoegd.

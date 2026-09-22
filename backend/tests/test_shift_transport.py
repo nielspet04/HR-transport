@@ -31,6 +31,9 @@ def test_train_shift_can_be_bike_or_car_and_bike_ignores_early_late(tmp_path,mon
     assert row['selected_mode']=='Auto' and row['tariff_kind']=='SPECIAL'
     choose(store,run,1,'TRAIN')
     assert store.get_matching(run)['calculation']['rows'][0]['status']=='EXCLUDED_TRAIN'
+    choose(store,run,1,'COMPANY_CAR')
+    row=store.get_matching(run)['calculation']['rows'][0]
+    assert row['status']=='EXCLUDED_COMPANY_CAR' and row['amount'] is None and row['selected_mode']=='Dienstwagen'
 
 
 def test_invalid_shift_transport_choice_rejected(tmp_path,monkeypatch):

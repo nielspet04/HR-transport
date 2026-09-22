@@ -1,8 +1,11 @@
 # Meerdere werklocaties op één dag
 
 Fase-2-bewegingen worden per werknemer en startdatum geordend op bronshifttijden.
-Eerste beweging: thuis → locatie. Volgende beweging: vorige → huidige locatie.
-Voor drie locaties ontstaat A→B→C, nooit opnieuw thuis→B of thuis→C.
+Eerste beweging: thuis → locatie. Een volgende beweging gebruikt alleen
+vorige locatie → huidige locatie wanneer de pauze tussen het einde van de
+vorige en de start van de volgende shift **maximaal 120 minuten** bedraagt.
+Bij 121 minuten of meer wordt opnieuw thuis → huidige locatie gebruikt. De
+grens wordt inclusief toegepast: exact twee uur is een rechtstreekse transfer.
 Alle bronshiften van een gegroepeerde beweging bepalen het tijdinterval; overlap,
 gelijke/onduidelijke start, ontbrekende tijden of een onzekere koppeling blokkeren
 de dag. Eindtijden over middernacht krijgen hun dag-offset. Een verplaatsing over
@@ -28,4 +31,11 @@ Maandshiften heeft aparte groepen en een filter **Meerdere werklocaties**.
 Zolang de benodigde tussenafstand ontbreekt staat de extra beweging zonder bedrag.
 Mapbox wordt nooit door de controleberekening zelf aangeroepen. Vraag de nieuwe
 routes bewust op onder Werknemersroutes; nieuwe Excelcontroles gebruiken daarna
-de tussenlocatieafstand. Geen impliciete extra rit naar thuis, geen payroll-export.
+de passende thuis- of tussenlocatieafstand. Geen payroll-export.
+
+Ieder succesvol berekend shiftbedrag kan HR vóór de finale export handmatig
+corrigeren. De reden is verplicht; automatisch origineel bedrag, gecorrigeerd
+bedrag en volledige correctiehistorie blijven bewaard. Herstellen voegt een
+nieuwe historische regel toe en activeert opnieuw de automatische berekening.
+Een bedragscorrectie maakt een geblokkeerde of uitgesloten beweging niet
+betaalbaar en verandert de bronafstand of vervoerskeuze niet.

@@ -42,6 +42,8 @@ def calculate_cached_month(db,config,run_id,payload):
         if chosen=='AUTO':available=[{'route_id':None,'mode':'Privé auto','kms':None,'valid_from':m['day']}]
         elif chosen=='BIKE':available=[{'route_id':None,'mode':'Fiets','kms':None,'valid_from':m['day']}]
         elif chosen=='TRAIN':available=[{'route_id':None,'mode':'Trein','kms':None,'valid_from':m['day']}]
+        elif chosen=='COMPANY_CAR':available=[{'route_id':None,'mode':'Dienstwagen','kms':None,'valid_from':m['day']}]
+        elif chosen=='MOBILITY_BUDGET':available=[{'route_id':None,'mode':'Mob budget','kms':None,'valid_from':m['day']}]
         cars=[r for r in available if mode_key(r['mode']) in ('auto','privé auto')]
         bikes=[r for r in available if mode_key(r['mode'])=='fiets']
         if cars and chosen!='BIKE':bikes=[]
@@ -76,7 +78,7 @@ def calculate_cached_month(db,config,run_id,payload):
                     result.update(status='CALCULATED',amount=format((total*rate).quantize(Decimal('.01'),rounding=ROUND_HALF_UP),'.2f'),reason='Fiets: gewone fietsvergoeding heen en terug; geen vroeg/laat- of 48h-toeslag.',tariff_kind='BICYCLE',selected_mode='Fiets',distance=str(km),reimbursed_kms=str(total),distance_factor=2,distance_valid_from=max(context['home_valid_from'],context['location_valid_from']),tariff_id=tariff['id'],tariff_valid_from=tariff['valid_from'],tariff_source=tariff['source'],rate_per_km=str(rate),rule=f'{km} km × 2 × €{rate}/km',mapbox_route_id=selected['id'],distance_source=selected['distance_source'],override_reason=choice['reason'] if choice else None)
         result.update(multi_location=leg.get('multi_location',False),origin_location=leg.get('origin_location'),sequence=leg.get('sequence'),
                       gap_minutes=leg.get('gap_minutes'),journey_kind=leg.get('journey_kind'))
-        result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
+        result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else 'Dienstwagen' if chosen=='COMPANY_CAR' else 'Mob budget' if chosen=='MOBILITY_BUDGET' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
                       travel_kms=selected['kms'] if selected else None,
                       mapbox_route_id=result.get('mapbox_route_id') or (selected['id'] if selected else None),override_reason=result.get('override_reason') or (choice['reason'] if choice else selected.get('override_reason') if selected else None))
         if plan_error:
@@ -99,6 +101,10 @@ def calculate_cached_month(db,config,run_id,payload):
                     amount_override_reason=correction['active']['reason'])
             else:result['amount_source']='BEREKEND'
         results.append(result)
+    from app.monthly_aggregation import aggregate
+    monthly=aggregate(payload,results)
+    from app.configuration.external_references import enrich_monthly
+    enrich_monthly(db,payload,monthly)
     return {'rows':results,'resolved_movements':movements,'statuses':dict(Counter(r['status'] for r in results)),
-            'payroll_ready':False,'distance_policy':'cached-route-with-hr-override-ceil-auto-default',
+            'monthly':monthly,'payroll_ready':False,'distance_policy':'cached-route-with-hr-override-ceil-auto-default',
         'warning':'Controleberekening per gekozen vervoer. Fiets gebruikt uitsluitend het gewone gedateerde fietstarief, heen en terug, zonder vroeg/laat- of 48h-toeslag. Overlap/onzekere volgorde blokkeert. Weekmaximum volgt. Geen uitbetalingsbestand.'}
