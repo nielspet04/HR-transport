@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
+from posixpath import normpath
 import re
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
@@ -15,6 +16,7 @@ from openpyxl.utils.datetime import to_excel
 
 
 SHEET = 'Afwijkende loonelementen'
+REMOVED_SHEET = 'LIST NIET UITBETALEN '
 HEADERS = (
     'Acerta Connect\nStandaard Template\n Afwijkende loonelementen\n(*) verplicht',
     'Update code',
@@ -33,8 +35,8 @@ HEADERS = (
     'Startdatum (fractie)',
     'Einddatum (fractie)',
 )
-PAY_CODES = {'STANDARD': '25', 'SPECIAL': '26', 'EXTRA48': '26', 'BICYCLE': '420'}
-EXCLUDED = {'EXCLUDED_TRAIN', 'EXCLUDED_COMPANY_CAR', 'EXCLUDED_MOBILITY_BUDGET'}
+PAY_CODES = {'STANDARD': '25', 'SPECIAL': '26', 'EXTRA48': '4864', 'BICYCLE': '420'}
+EXCLUDED = {'EXCLUDED_TRAIN', 'EXCLUDED_COMPANY_CAR', 'EXCLUDED_MOBILITY_BUDGET', 'EXCLUDED_TELEWORK'}
 
 
 def _amount(value):
@@ -100,7 +102,7 @@ def payroll_rows(payload):
     if not calculated_count:
         raise ValueError('Deze maand bevat geen vergoedbare shiften om te exporteren.')
     rows = []
-    order = {'25': 0, '26': 1, '420': 2}
+    order = {'25': 0, '26': 1, '4864': 2, '420': 3}
     for (_, reference, name, code, location, amount), units in sorted(
         groups.items(), key=lambda item: (item[0][2].casefold(), order[item[0][3]], item[0][4].casefold(), item[0][5])
     ):
@@ -127,7 +129,7 @@ def _safe_workbook(content):
         workbook = load_workbook(BytesIO(content), data_only=False, keep_links=True)
     except Exception:
         raise ValueError('Het gekozen Accerta-bestand kan niet veilig worden gelezen.') from None
-    if workbook.sheetnames != [SHEET, 'LIST NIET UITBETALEN ']:
+    if workbook.sheetnames != [SHEET, REMOVED_SHEET]:
         workbook.close()
         raise ValueError('Dit is niet het verwachte officiële Accerta-bestand: tabbladen wijken af.')
     sheet = workbook[SHEET]
@@ -136,6 +138,54 @@ def _safe_workbook(content):
         workbook.close()
         raise ValueError('Dit is niet het verwachte officiële Accerta-bestand: kolomstructuur wijkt af.')
     return workbook
+
+
+def _remove_informational_sheet(source):
+    """Remove the non-payable-list sheet and its package references."""
+    workbook_path = 'xl/workbook.xml'
+    relationships_path = 'xl/_rels/workbook.xml.rels'
+    content_types_path = '[Content_Types].xml'
+    workbook = ElementTree.fromstring(source.read(workbook_path))
+    namespace = workbook.tag.partition('}')[0] + '}'
+    sheets = workbook.find(namespace + 'sheets')
+    relation_key = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
+    matches = [sheet for sheet in sheets if sheet.attrib.get('name') == REMOVED_SHEET]
+    if len(matches) != 1 or not matches[0].attrib.get(relation_key):
+        raise ValueError('Het informatieve Accerta-tabblad kan niet veilig worden verwijderd.')
+    removed = matches[0]
+    relation_id = removed.attrib[relation_key]
+    sheets.remove(removed)
+
+    defined_names = workbook.find(namespace + 'definedNames')
+    if defined_names is not None:
+        for defined_name in list(defined_names):
+            if defined_name.attrib.get('localSheetId') == '1' or REMOVED_SHEET.strip() in (defined_name.text or ''):
+                defined_names.remove(defined_name)
+        if not list(defined_names):
+            workbook.remove(defined_names)
+
+    relationships = ElementTree.fromstring(source.read(relationships_path))
+    related = [item for item in relationships if item.attrib.get('Id') == relation_id]
+    if len(related) != 1:
+        raise ValueError('De verwijzing naar het informatieve Accerta-tabblad is niet eenduidig.')
+    target = related[0].attrib.get('Target', '')
+    relationships.remove(related[0])
+    sheet_path = normpath(target.lstrip('/') if target.startswith('/xl/') else f'xl/{target}')
+    if not sheet_path.startswith('xl/worksheets/') or sheet_path not in source.namelist():
+        raise ValueError('Het informatieve Accerta-tabblad heeft een onverwachte pakketstructuur.')
+
+    content_types = ElementTree.fromstring(source.read(content_types_path))
+    overrides = [item for item in content_types if item.attrib.get('PartName') == f'/{sheet_path}']
+    if len(overrides) != 1:
+        raise ValueError('Het informatieve Accerta-tabblad heeft geen eenduidig inhoudstype.')
+    content_types.remove(overrides[0])
+    removed_parts = {sheet_path, f"{sheet_path.rsplit('/', 1)[0]}/_rels/{sheet_path.rsplit('/', 1)[1]}.rels"}
+    replacements = {
+        workbook_path: ElementTree.tostring(workbook, encoding='utf-8', xml_declaration=True),
+        relationships_path: ElementTree.tostring(relationships, encoding='utf-8', xml_declaration=True),
+        content_types_path: ElementTree.tostring(content_types, encoding='utf-8', xml_declaration=True),
+    }
+    return removed_parts, replacements
 
 
 def _row_xml(number, values, row_start, styles, present):
@@ -206,9 +256,13 @@ def replace_example_rows(template, rows):
         if dimensions != 1 or filters != 1:
             raise ValueError('Bereik of filter van het officiële Accerta-werkblad wijkt af.')
         output = BytesIO()
+        removed_parts, replacements = _remove_informational_sheet(source)
+        replacements['xl/worksheets/sheet1.xml'] = xml
         with ZipFile(output, 'w', ZIP_DEFLATED) as target:
             for info in source.infolist():
-                target.writestr(info, xml if info.filename == 'xl/worksheets/sheet1.xml' else source.read(info.filename))
+                if info.filename in removed_parts:
+                    continue
+                target.writestr(info, replacements.get(info.filename, source.read(info.filename)))
     return output.getvalue()
 
 

@@ -27,7 +27,7 @@ def payload():
 def test_employee_totals_keep_details_exclusions_and_hr_amount():
     rows=[{'movement_id':1,'status':'CALCULATED','amount':'4.81','selected_mode':'Auto','distance':'8','rule':'table','amount_source':'BEREKEND'},
           {'movement_id':2,'status':'CALCULATED','amount':'8.25','selected_mode':'Auto','distance':'8','rule':'HR','amount_source':'HR'},
-          {'movement_id':3,'status':'EXCLUDED_COMPANY_CAR','amount':None,'selected_mode':'Dienstwagen','reason':'Geen vergoeding'}]
+          {'movement_id':3,'status':'EXCLUDED_TELEWORK','amount':None,'selected_mode':'Telework','reason':'Geen vergoeding'}]
     result=aggregate(payload(),rows)
     assert result['calculated_total']=='13.06' and result['employee_count']==2
     assert result['excluded']==1 and result['blocking']==0 and result['ready']
@@ -42,3 +42,20 @@ def test_blocked_or_later_prevents_month_close():
     result=aggregate(payload(),rows)
     assert not result['ready'] and result['blocking']==2 and result['excluded']==1
     assert sum(not e['ready'] for e in result['employees'])==1
+
+
+def test_shift_details_keep_calculation_audit_information():
+    data=payload()
+    data['movements'][0]['source_shifts']=[{'start':'08:00','end':'16:00','customer':'Site klant'}]
+    data['movements'][0].update(extra_shift_48h=True,early_late=True)
+    row={'movement_id':1,'status':'CALCULATED','amount':'2.22','selected_mode':'Fiets',
+         'distance':'3','reimbursed_kms':'6','distance_source':'MAPBOX','distance_valid_from':'2026-01-01',
+         'rule':'3 km × 2 × €0.37/km','tariff_kind':'BICYCLE','tariff_id':4,
+         'tariff_valid_from':'2026-01-01','tariff_source':'CAO','rate_per_km':'0.37'}
+
+    shift=aggregate(data,[row])['employees'][0]['shifts'][0]
+
+    assert shift['reimbursed_kms']=='6' and shift['distance_source']=='MAPBOX'
+    assert shift['tariff_source']=='CAO' and shift['rate_per_km']=='0.37'
+    assert shift['extra_shift_48h'] is True and shift['early_late'] is True
+    assert shift['source_shifts'][0]['customer']=='Site klant'

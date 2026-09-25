@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS route_distances(
 CREATE TABLE IF NOT EXISTS route_visualizations(
  route_id INTEGER PRIMARY KEY REFERENCES route_distances(id), status TEXT NOT NULL,
  geometry TEXT, kms TEXT, requested_at TEXT NOT NULL, message TEXT);
+CREATE TABLE IF NOT EXISTS route_map_backgrounds(
+ route_id INTEGER PRIMARY KEY REFERENCES route_distances(id), status TEXT NOT NULL,
+ png BLOB, requested_at TEXT NOT NULL, expires_at TEXT NOT NULL, message TEXT);
+CREATE TABLE IF NOT EXISTS route_map_usage(
+ month TEXT PRIMARY KEY, requests INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS route_visualization_usage(
+ month TEXT PRIMARY KEY, requests INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS route_saved_contexts(
  route_id INTEGER PRIMARY KEY REFERENCES route_distances(id), contexts TEXT NOT NULL);
 '''
@@ -77,11 +84,14 @@ def plan(db, config, run_id):
         from app.shift_transport import choices as transport_choices
         overrides=transport_choices(db,payload)
         from app.itinerary import itineraries
-        journey=itineraries(payload)
+        journey=itineraries(payload,{movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'})
         agents = {a['planet_id']:a for a in payload['agents']}
         for movement in payload['movements']:
             agent = agents[movement['planet_id']]; wid = agent.get('worker_id'); day = movement['day']
             context = {'worker':workers.get(wid, movement['planet_id']), 'location':movement.get('location') or movement['source_location'], 'day':day}
+            choice=overrides.get(movement.get('id'))
+            if movement['status'] == 'MATCHED' and choice and choice['mode']=='TELEWORK':
+                excluded += 1;continue
             leg=journey.get((movement['planet_id'],day,movement.get('id')),{})
             if leg.get('error'):
                 blocked.append({**context,'reason':leg['error']});continue
@@ -89,9 +99,8 @@ def plan(db, config, run_id):
             if movement['status'] != 'MATCHED':
                 blocked.append({**context,'reason':'Werknemer/locatie niet gekoppeld.'});continue
             routes = movement.get('routes', [])
-            choice=overrides.get(movement.get('id'))
             if choice and choice['mode']!='DEFAULT':
-                routes=({'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein','COMPANY_CAR':'Dienstwagen','MOBILITY_BUDGET':'Mob budget'}[choice['mode']],)
+                routes=({'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein','COMPANY_CAR':'Dienstwagen','MOBILITY_BUDGET':'Mob budget','TELEWORK':'Telework'}[choice['mode']],)
                 routes=[{'mode':routes[0]}]
             if not routes:
                 blocked.append({**context,'reason':'Geen vervoerswijze geldig op de prestatiedatum.'});continue
@@ -99,7 +108,7 @@ def plan(db, config, run_id):
                 if from_location and any(profile(r['mode'])=='driving' for r in routes) and profile(route['mode'])!='driving':continue
                 mode = profile(route['mode'])
                 if mode is None:
-                    if norm(route['mode']) in ('trein','dienstwagen','mob budget'):
+                    if norm(route['mode']) in ('trein','dienstwagen','mob budget','telework'):
                         excluded += 1
                     else:
                         blocked.append({**context,'reason':'Onbekende vervoerswijze: '+route['mode']})
@@ -217,10 +226,14 @@ def request_visualization(store, data, revision):
         route = db.execute('SELECT * FROM route_distances WHERE id=? AND status=?', (data.get('route_id'),'READY')).fetchone()
         if not route:raise ValueError('Geen opgeslagen routeafstand beschikbaar.')
         if db.execute('SELECT 1 FROM route_visualizations WHERE route_id=?', (route['id'],)).fetchone():return
+        month=datetime.now(timezone.utc).strftime('%Y-%m')
+        used=db.execute('SELECT requests FROM route_visualization_usage WHERE month=?',(month,)).fetchone()
+        if used and used['requests']>=1000:raise ValueError('Veilige maandlimiet voor aanvullende routelijnen bereikt.')
         token_value()
         origin = coords(dict(db.execute('SELECT * FROM address_geocodes WHERE id=?', (route['origin_geocode_id'],)).fetchone()))
         destination = coords(dict(db.execute('SELECT * FROM address_geocodes WHERE id=?', (route['destination_geocode_id'],)).fetchone()))
         db.execute('INSERT INTO route_visualizations(route_id,status,requested_at) VALUES(?,?,?)', (route['id'],'PENDING',datetime.now(timezone.utc).isoformat()))
+        db.execute('INSERT INTO route_visualization_usage(month,requests) VALUES(?,1) ON CONFLICT(month) DO UPDATE SET requests=requests+1',(month,))
     try:
         result = request_distance(route['profile'],origin,destination)
         validate_geometry(result.get('geometry'))

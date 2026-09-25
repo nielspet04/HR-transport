@@ -67,15 +67,19 @@ def export_rows(store, run_id):
         shift_rows=[]
         for month,p in sorted(payloads.items()):
             agents={a['planet_id']:a for a in p['agents']}
+            from app.shift_transport import choices as transport_choices
+            overrides=transport_choices(db,p)
             for m in p['movements']:
                 agent=agents[m['planet_id']];wid=agent.get('worker_id')
                 name=workers.get(wid) or ' / '.join(agent.get('source_names',[])) or f"Planet {m['planet_id']}"
-                options=m.get('routes') or [{'mode':'Niet ingesteld'}]
+                choice=overrides.get(m.get('id'))
+                selected_modes={'AUTO':'Privé auto','BIKE':'Fiets','TRAIN':'Trein','COMPANY_CAR':'Dienstwagen','MOBILITY_BUDGET':'Mob budget','TELEWORK':'Telework'}
+                options=[{'mode':selected_modes[choice['mode']]}] if choice and choice['mode']!='DEFAULT' else m.get('routes') or [{'mode':'Niet ingesteld'}]
                 for option in options:
                     mode=option['mode'];r=lookup.get((wid,norm(m.get('location') or ''),m['day'],profile(mode)))
-                    train=norm(mode)=='trein'
-                    km='n.v.t.' if train or norm(mode)=='dienstwagen' else whole_kms(r['kms']) if r and r['status']=='READY' else None
-                    status='N.V.T.' if train or norm(mode)=='dienstwagen' else r['status'] if r else m['status'] if m['status']!='MATCHED' else 'AFSTAND ONTBREEKT'
+                    excluded=norm(mode) in ('trein','dienstwagen','mob budget','telework')
+                    km='n.v.t.' if excluded else whole_kms(r['kms']) if r and r['status']=='READY' else None
+                    status='N.V.T.' if excluded else r['status'] if r else m['status'] if m['status']!='MATCHED' else 'AFSTAND ONTBREEKT'
                     if r and r.get('distance_source')=='HR':status='HR-CORRECTIE: '+r['override_reason']
                     sources=m.get('source_shifts',[])
                     shift=' / '.join(dict.fromkeys(shift_label(s) for s in sources))

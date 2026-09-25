@@ -212,23 +212,17 @@ class RouteStore(Store):
             elif action=='extra_shift_tariff':
                 from app.calculation import validate_km_rate
                 start=valid_day(data.get('valid_from'));reason=required(data.get('reason'));rate=validate_km_rate(data.get('rate_per_km'))
-                last=db.execute('SELECT max(valid_from) FROM extra_shift_tariffs').fetchone()[0]
-                if start<last:raise ValueError('Kies de laatste tariefdatum of een latere datum.')
                 db.execute('INSERT INTO extra_shift_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
                     (start,rate,'HR-configuratie',reason,datetime.now(timezone.utc).isoformat()))
             elif action=='bicycle_tariff':
                 from app.calculation import validate_km_rate
                 start=valid_day(data.get('valid_from'));reason=required(data.get('reason'));rate=validate_km_rate(data.get('rate_per_km'))
-                last=db.execute('SELECT max(valid_from) FROM bicycle_tariffs').fetchone()[0]
-                if last and start<last:raise ValueError('Kies de laatste fietstariefdatum of een latere datum.')
                 db.execute('INSERT INTO bicycle_tariffs(valid_from,rate_per_km,source,reason,changed_at) VALUES(?,?,?,?,?)',
                     (start,rate,'HR-configuratie',reason,datetime.now(timezone.utc).isoformat()))
             elif action in ('car_tariff','special_car_tariff'):
                 from app.calculation import validate_tariff
                 start=valid_day(data.get('valid_from'));reason=required(data.get('reason'))
                 table='special_car_tariffs' if action=='special_car_tariff' else 'car_tariffs'
-                last=db.execute(f'SELECT max(valid_from) FROM {table}').fetchone()[0]
-                if start<last:raise ValueError('Kies de laatste tariefdatum of een latere datum.')
                 tariff=validate_tariff(data)
                 db.execute(f'INSERT INTO {table}(valid_from,data,source,reason,changed_at) VALUES(?,?,?,?,?)',
                     (start,json.dumps(tariff),'HR-configuratie',reason,datetime.now(timezone.utc).isoformat()))
@@ -285,8 +279,10 @@ class RouteStore(Store):
                 try:issues=plan(db,matching_config,latest['id'])['blocked']
                 except ValueError as error:issue_warning=str(error)
             from app.location_transfers import overview as transfer_overview
-            return {'view':'routes','app_version':'phase10-acerta-fixed-template-v1','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**external_reference_snapshot(db),**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
+            from app.route_preview import catalog as route_map_catalog
+            return {'view':'routes','app_version':'phase10-shift-telework-v1','revision':db.execute('SELECT revision FROM meta').fetchone()[0],**config,**shift_transport_snapshot(db),**addresses,**external_reference_snapshot(db),**location_snapshot(db),'mapbox_configured':configured(),'geocoding_bulk_plan':bulk_plan(addresses['addresses']),'automatic_routes':automatic_state(db),
                 'route_distances':cached_distances(db),
+                'route_maps':route_map_catalog(db),
                 'route_issues':issues,'route_issue_warning':issue_warning,
                 'location_transfers':transfer_overview(db,matching_config),
                 'matching_runs':[{'id':r['id'],'month':r['month'],'created_at':r['created_at'],'source_sha256':json.loads(r['payload']).get('source_sha256')} for r in db.execute('SELECT id,month,created_at,payload FROM matching_runs WHERE month NOT IN (SELECT month FROM excluded_months) ORDER BY id DESC')],

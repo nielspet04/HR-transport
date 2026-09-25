@@ -25,7 +25,7 @@ def payload():
         {'movement_id': 4, 'status': 'CALCULATED', 'amount': '7.50', 'tariff_kind': 'EXTRA48'},
         {'movement_id': 5, 'status': 'CALCULATED', 'amount': '7.50', 'tariff_kind': 'SPECIAL'},
         {'movement_id': 6, 'status': 'CALCULATED', 'amount': '8.14', 'tariff_kind': 'BICYCLE'},
-        {'movement_id': 7, 'status': 'EXCLUDED_TRAIN', 'amount': None},
+        {'movement_id': 7, 'status': 'EXCLUDED_TELEWORK', 'amount': None},
     ]
     return {'month': '2026-08', 'stale': False,
         'agents': [{'planet_id': 'p1', 'worker_id': 10}], 'movements': movements,
@@ -48,7 +48,8 @@ def test_groups_by_worker_location_code_and_exact_amount():
     rows = payroll_rows(payload())
     assert [(row[6], row[7], row[8], row[13]) for row in rows] == [
         ('25', 2, 6.7, 'LUCHTHAVEN'), ('26', 1, 7.5, 'LUCHTHAVEN'),
-        ('26', 2, 7.5, 'POSTNL'), ('420', 1, 8.14, 'POSTNL')]
+        ('26', 1, 7.5, 'POSTNL'), ('4864', 1, 7.5, 'POSTNL'),
+        ('420', 1, 8.14, 'POSTNL')]
     assert all(row[2] == '00123' and row[4] == date(2026, 8, 1) for row in rows)
     assert all(row[14] == date(2026, 8, 1) and row[15] == date(2026, 8, 31) for row in rows)
 
@@ -67,9 +68,9 @@ def test_safety_blocks_incomplete_or_unknown_month(change, message):
 def test_replaces_examples_and_preserves_template_structure_and_styles():
     original = template_bytes(); rows = payroll_rows(payload()); result = replace_example_rows(original, rows)
     before = load_workbook(BytesIO(original)); after = load_workbook(BytesIO(result))
-    assert after.sheetnames == before.sheetnames == ['Afwijkende loonelementen', 'LIST NIET UITBETALEN ']
+    assert before.sheetnames == ['Afwijkende loonelementen', 'LIST NIET UITBETALEN ']
+    assert after.sheetnames == ['Afwijkende loonelementen']
     assert [after['Afwijkende loonelementen'].cell(1, c).value for c in range(1, 17)] == list(HEADERS)
-    assert list(after['LIST NIET UITBETALEN '].values) == list(before['LIST NIET UITBETALEN '].values)
     sheet = after['Afwijkende loonelementen']; assert sheet.max_row == 1 + len(rows)
     assert all(row[2].value != '00999' for row in sheet.iter_rows(min_row=2))
     assert sheet['C2'].value == '00123' and sheet['C2'].data_type == 's'
@@ -78,9 +79,11 @@ def test_replaces_examples_and_preserves_template_structure_and_styles():
     assert sheet['E2'].value.date() == date(2026, 8, 1)
     assert sheet.auto_filter.ref == f'A1:XFD{sheet.max_row}'
     with ZipFile(BytesIO(original)) as source, ZipFile(BytesIO(result)) as exported:
-        assert source.namelist() == exported.namelist()
+        assert 'xl/worksheets/sheet2.xml' not in exported.namelist()
+        changed = {'[Content_Types].xml', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels',
+                   'xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml'}
         assert all(source.read(name) == exported.read(name) for name in source.namelist()
-                   if name != 'xl/worksheets/sheet1.xml')
+                   if name not in changed)
 
 
 def test_formula_like_name_and_location_remain_literal_text():
@@ -102,7 +105,7 @@ def test_fixed_local_template_is_used_without_monthly_upload(tmp_path):
     (tmp_path / 'acerta-template.xlsx').write_bytes(template_bytes())
     result, month = workbook_bytes(Store(), 7)
     sheet = load_workbook(BytesIO(result))['Afwijkende loonelementen']
-    assert month == '2026-08' and sheet.max_row == 5 and sheet['D2'].value == 'Voorbeeld Alex'
+    assert month == '2026-08' and sheet.max_row == 6 and sheet['D2'].value == 'Voorbeeld Alex'
 
 
 def test_missing_fixed_template_is_explicit(tmp_path):

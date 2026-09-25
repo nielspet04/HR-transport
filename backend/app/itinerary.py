@@ -6,9 +6,11 @@ from app.importers.reference import norm
 MAX_DIRECT_TRANSFER_GAP=timedelta(hours=2)
 
 
-def itineraries(payload):
+def itineraries(payload, excluded_movement_ids=()):
+    excluded_movement_ids=set(excluded_movement_ids)
     agents={a['planet_id']:a for a in payload['agents']};groups=defaultdict(list);result={}
     for m in payload['movements']:
+        if m.get('id') in excluded_movement_ids:continue
         wid=agents[m['planet_id']].get('worker_id')
         groups[(wid or m['planet_id'],m['day'])].append(m)
     for group in groups.values():

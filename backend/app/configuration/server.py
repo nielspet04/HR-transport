@@ -39,6 +39,11 @@ def make_server(store,port=8765):
             if not self.host_ok():return self.reply(403,'{}')
             if self.path=='/api/state':
                 return self.reply(200,json.dumps({**store.snapshot(),'csrf':token},ensure_ascii=False))
+            if urlsplit(self.path).path=='/api/revision':
+                query=parse_qs(urlsplit(self.path).query)
+                if not secrets.compare_digest(query.get('csrf',[''])[0],token):return self.reply(403,'{}')
+                with store.connect() as db:revision=db.execute('SELECT revision FROM meta').fetchone()[0]
+                return self.reply(200,json.dumps({'revision':revision}))
             if urlsplit(self.path).path=='/api/routing/export':
                 query=parse_qs(urlsplit(self.path).query)
                 if not secrets.compare_digest(query.get('csrf',[''])[0],token):return self.reply(403,'{}')

@@ -15,10 +15,12 @@ Per werknemer worden betaalde bewegingen gegroepeerd op fysieke locatie,
 looncode en exact bedrag per beweging:
 
 - `25`: standaard autotarief;
-- `26`: vroeg/laat en 48u-extra-shift;
+- `26`: vroeg/laat;
+- `4864`: 48u-extra-shift;
 - `420`: fietsvergoeding.
 
 `Eenheden` is het aantal bewegingen in de groep. `Bedrag per eenheid` is het
 bedrag van één beweging. De loonperiode en startdatum zijn de eerste dag van de
 geselecteerde maand; de einddatum is de laatste dag. Trein, dienstwagen en
-mobiliteitsbudget krijgen geen exportregel.
+mobiliteitsbudget en shifts die HR als telework markeert krijgen geen
+exportregel.

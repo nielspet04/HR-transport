@@ -48,6 +48,16 @@ def test_settings_and_hr_correction_recalculate_persist(tmp_path,monkeypatch):
     assert calculate(reopened,run,p)['rows'][0]['amount']=='10.00'
 
 
+def test_backdated_tariff_correction_after_future_version(tmp_path):
+    from app.configuration.routes import RouteStore
+    store=RouteStore(tmp_path/'rates.sqlite3')
+    store.apply('extra_shift_tariff',{'valid_from':'2026-09-25','rate_per_km':'0.4440','reason':'Toekomstige versie'},store.snapshot()['revision'])
+    store.apply('extra_shift_tariff',{'valid_from':'2026-08-01','rate_per_km':'0.4440','reason':'Correctie augustus'},store.snapshot()['revision'])
+    m=movement('10');m.update(day='2026-08-15',extra_shift_48h=True,phase5_special=True,early_late=False)
+    result=calculate_movement(m,[tariff()],[],store.snapshot()['extra_shift_tariffs'])
+    assert result['rate_per_km']=='0.4440' and result['tariff_valid_from']=='2026-08-01'
+
+
 def test_missing_route_and_multilocation_still_blocked(tmp_path,monkeypatch):
     store,run,p,wid=setup_case(tmp_path,monkeypatch,cached=False)
     p['movements'][0].update(early_late=False,extra_shift_48h=True,phase5_special=True)

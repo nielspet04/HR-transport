@@ -2,7 +2,7 @@
 from collections import Counter
 from decimal import Decimal
 
-EXCLUDED={'EXCLUDED_TRAIN','EXCLUDED_COMPANY_CAR','EXCLUDED_MOBILITY_BUDGET'}
+EXCLUDED={'EXCLUDED_TRAIN','EXCLUDED_COMPANY_CAR','EXCLUDED_MOBILITY_BUDGET','EXCLUDED_TELEWORK'}
 
 
 def aggregate(payload,rows):
@@ -20,7 +20,16 @@ def aggregate(payload,rows):
         group['shifts'].append({'movement_id':movement['id'],'date':movement['day'],
             'location':movement.get('location') or movement.get('source_location'),'status':row['status'],
             'mode':row.get('selected_mode'),'distance':row.get('distance'),'rule':row.get('rule'),
-            'amount':row.get('amount'),'amount_source':row.get('amount_source'),'reason':row.get('reason')})
+            'amount':row.get('amount'),'amount_source':row.get('amount_source'),'reason':row.get('reason'),
+            'original_amount':row.get('original_amount'),'amount_override_reason':row.get('amount_override_reason'),
+            'reimbursed_kms':row.get('reimbursed_kms'),'distance_factor':row.get('distance_factor'),
+            'distance_source':row.get('distance_source'),'distance_valid_from':row.get('distance_valid_from'),
+            'tariff_kind':row.get('tariff_kind'),'tariff_id':row.get('tariff_id'),
+            'tariff_valid_from':row.get('tariff_valid_from'),'tariff_source':row.get('tariff_source'),
+            'rate_per_km':row.get('rate_per_km'),'override_reason':row.get('override_reason'),
+            'extra_shift_48h':movement.get('extra_shift_48h') is True,
+            'early_late':movement.get('early_late') is True,
+            'source_shifts':movement.get('source_shifts',[])})
     employees=[]
     for group in groups.values():
         blocking=group['statuses']['BLOCKED']+group['statuses']['LATER_PHASE']

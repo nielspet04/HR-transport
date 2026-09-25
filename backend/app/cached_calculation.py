@@ -13,10 +13,10 @@ from app.calculation import validate_km_rate
 def calculate_cached_month(db,config,run_id,payload):
     movements=deepcopy(payload['movements'])
     agents={a['planet_id']:a for a in payload['agents']}
-    from app.itinerary import itineraries
-    journeys=itineraries(payload)
     from app.shift_transport import choices as transport_choices
     overrides=transport_choices(db,payload)
+    from app.itinerary import itineraries
+    journeys=itineraries(payload,{movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'})
     from app.calculation_corrections import corrections as amount_corrections
     amount_overrides=amount_corrections(db,payload)
     sites=defaultdict(set)
@@ -44,6 +44,7 @@ def calculate_cached_month(db,config,run_id,payload):
         elif chosen=='TRAIN':available=[{'route_id':None,'mode':'Trein','kms':None,'valid_from':m['day']}]
         elif chosen=='COMPANY_CAR':available=[{'route_id':None,'mode':'Dienstwagen','kms':None,'valid_from':m['day']}]
         elif chosen=='MOBILITY_BUDGET':available=[{'route_id':None,'mode':'Mob budget','kms':None,'valid_from':m['day']}]
+        elif chosen=='TELEWORK':available=[{'route_id':None,'mode':'Telework','kms':None,'valid_from':m['day']}]
         cars=[r for r in available if mode_key(r['mode']) in ('auto','privé auto')]
         bikes=[r for r in available if mode_key(r['mode'])=='fiets']
         if cars and chosen!='BIKE':bikes=[]
@@ -78,12 +79,12 @@ def calculate_cached_month(db,config,run_id,payload):
                     result.update(status='CALCULATED',amount=format((total*rate).quantize(Decimal('.01'),rounding=ROUND_HALF_UP),'.2f'),reason='Fiets: gewone fietsvergoeding heen en terug; geen vroeg/laat- of 48h-toeslag.',tariff_kind='BICYCLE',selected_mode='Fiets',distance=str(km),reimbursed_kms=str(total),distance_factor=2,distance_valid_from=max(context['home_valid_from'],context['location_valid_from']),tariff_id=tariff['id'],tariff_valid_from=tariff['valid_from'],tariff_source=tariff['source'],rate_per_km=str(rate),rule=f'{km} km × 2 × €{rate}/km',mapbox_route_id=selected['id'],distance_source=selected['distance_source'],override_reason=choice['reason'] if choice else None)
         result.update(multi_location=leg.get('multi_location',False),origin_location=leg.get('origin_location'),sequence=leg.get('sequence'),
                       gap_minutes=leg.get('gap_minutes'),journey_kind=leg.get('journey_kind'))
-        result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else 'Dienstwagen' if chosen=='COMPANY_CAR' else 'Mob budget' if chosen=='MOBILITY_BUDGET' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
+        result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else 'Dienstwagen' if chosen=='COMPANY_CAR' else 'Mob budget' if chosen=='MOBILITY_BUDGET' else 'Telework' if chosen=='TELEWORK' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
                       travel_kms=selected['kms'] if selected else None,
                       mapbox_route_id=result.get('mapbox_route_id') or (selected['id'] if selected else None),override_reason=result.get('override_reason') or (choice['reason'] if choice else selected.get('override_reason') if selected else None))
         if plan_error:
             result.update(status='BLOCKED',amount=None,reason=plan_error)
-        elif leg.get('error'):
+        elif leg.get('error') and chosen!='TELEWORK':
             result.update(status='LATER_PHASE',amount=None,reason=leg['error'])
         elif cars and not selected and result['status']=='BLOCKED' and m['status']=='MATCHED':
             result['reason']=('Tussenlocatieafstand ontbreekt: '+leg['origin_location']+' → '+m['location']+'. Vraag deze route eenmalig op via Werknemersroutes.' if leg.get('origin_location') else 'Geen bevestigde opgeslagen autoroute op deze datum. Geen fallback naar Sociaal-abo of Planet-kilometers.')

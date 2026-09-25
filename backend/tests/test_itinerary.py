@@ -69,3 +69,14 @@ def test_bicycle_transfer_uses_cycling_profile(tmp_path,monkeypatch):
     with store.transaction() as db:db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(p),run))
     transfer=next(r for r in store.get_route_plan(run)['routes'] if r['contexts'][0].get('route_kind')=='TRANSFER')
     assert transfer['profile']=='cycling'
+
+
+def test_telework_is_not_a_physical_stop_in_daily_itinerary(tmp_path,monkeypatch):
+    store,run,p,wid=multi_case(tmp_path,monkeypatch)
+    store.apply('shift_transport_choice',{'run_id':run,'movement_id':1,'mode':'TELEWORK','reason':'HR bevestigt telework'},store.snapshot()['revision'])
+    prepared=store.get_route_plan(run)
+    assert prepared['excluded']==2  # Telework plus the train option on the remaining movement.
+    assert prepared['routes'] and all(not context.get('origin_location') for route in prepared['routes'] for context in route['contexts'])
+    rows=store.get_matching(run)['calculation']['rows']
+    assert rows[0]['status']=='EXCLUDED_TELEWORK' and rows[0]['amount'] is None
+    assert rows[1]['origin_location'] is None and rows[1]['journey_kind'] is None
