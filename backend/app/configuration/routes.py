@@ -168,7 +168,7 @@ class RouteStore(Store):
         # Transport defaults are often edited for several locations in one
         # employee dialog. Do not start a competing background refresh after
         # every location; the stale month action refreshes the batch once.
-        if action in ('planet_upload','matching_refresh','matching_employee','matching_employee_ignore','matching_employee_restore','matching_location','employee_onboard','customer_onboard','address_save','address_link','location_address_save','location_geocode','location_geocode_review','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','shift_location_choice','itinerary_transfer_override','itinerary_employee_default'):
+        if action in ('planet_upload','matching_refresh','matching_employee','matching_employee_ignore','matching_employee_restore','matching_location','employee_onboard','customer_onboard','event_location_choice','address_save','address_link','location_address_save','location_geocode','location_geocode_review','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','shift_location_choice','itinerary_transfer_override','itinerary_employee_default'):
             from app.automatic_routes import trigger
             trigger(self)
         return result
@@ -181,6 +181,9 @@ class RouteStore(Store):
         if action=='customer_onboard':
             from app.customer_onboarding import onboard
             return onboard(self,data,revision)
+        if action=='event_location_choice':
+            from app.event_locations import save
+            return save(self,data,revision)
         if action=='location_transfer_override':
             from app.location_transfers import correct
             return correct(self,data,revision)

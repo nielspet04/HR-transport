@@ -277,6 +277,38 @@ function LocationResolution({ location, matching, state, save }) {
 </details>
 }
 
+function AdHocLocationResolution({ location, matching, state, save }) {
+  const [choice, setChoice] = useState('EXISTING')
+  const agent = (matching.agents || []).find(item => item.planet_id === location.planet_id)
+  const end = `${location.end || '—'}${location.end_day_offset ? ' (+1 dag)' : ''}`
+  return <details className="resolution-card">
+<summary>Event ad hoc · {location.day} · {location.start || '—'}–{end}</summary>
+<p>{agent?.worker_name || agent?.source_names?.[0] || `Agent ${location.planet_id}`} · iedere Event-ad-hocshift wordt afzonderlijk gekoppeld.</p>
+<form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('event_location_choice', { run_id: matching.run_id, movement_id: location.movement_id, choice, location: choice === 'EXISTING' ? form.get('existing') : form.get('new_name'), valid_from: location.day, mode: choice === 'NEW' ? form.get('mode') : undefined, address: choice === 'NEW' ? addressFrom(form, 'event_') : undefined, reason: form.get('reason') }) }}>
+<div className="form-grid">
+<Field label="Behandeling">
+<select value={choice} onChange={event => setChoice(event.target.value)}>
+<option value="EXISTING">Koppelen aan bestaande locatie</option>
+<option value="NEW">Nieuwe fysieke locatie</option>
+</select>
+</Field>{choice === 'EXISTING' ? <Field label="Bestaande locatie">
+<select name="existing" required>
+<option value="">Kies locatie…</option>{state.physical_locations.map(item => <option key={item.key} value={item.name}>{item.name}</option>)}</select>
+</Field> : <><Field label="Naam nieuwe locatie">
+<input name="new_name" defaultValue={`Event ${location.day}`} required />
+</Field><Field label="Standaard vervoer">
+<select name="mode" defaultValue="Privé auto">{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
+</Field></>}<Field label="Reden">
+<input name="reason" defaultValue="Eenmalige Event-ad-hoclocatie bevestigd door HR" required />
+</Field>
+</div>{choice === 'NEW' && <>
+<h4>Adres nieuwe locatie</h4>
+<AddressFields prefix="event_" />
+</>}<button className="primary">Deze shiftlocatie opslaan</button>
+</form>
+</details>
+}
+
 function PayrollResolution({ employee, save }) {
   return <form className="resolution-card compact-form" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('external_reference_save', { worker_id: employee.worker_id, external_reference: form.get('external_reference'), valid_from: form.get('valid_from'), reason: form.get('reason') }) }}>
 <div>
@@ -299,7 +331,8 @@ function PayrollResolution({ employee, save }) {
 
 function ActionCenter({ state, matching, data, save, onEmployee, onReview }) {
   const unresolvedAgents = (matching?.agents || []).filter(agent => agent.status !== 'MATCHED')
-  const unmatchedLocations = (matching?.locations || []).filter(location => location.status === 'UNMATCHED_LOCATION')
+  const unmatchedLocations = (matching?.locations || []).filter(location => location.status === 'UNMATCHED_LOCATION' && !location.is_ad_hoc)
+  const adHocLocations = (matching?.locations || []).filter(location => location.status === 'UNMATCHED_LOCATION' && location.is_ad_hoc)
   const payroll = (matching?.calculation?.monthly?.employees || []).filter(employee => employee.worker_id && employee.external_reference_status !== 'READY')
   const blockedShifts = (matching?.calculation?.monthly?.employees || []).flatMap(employee => (employee.shifts || []).filter(shift => shift.status === 'BLOCKED' || shift.status === 'LATER_PHASE').map(shift => ({ employee, shift })))
   return <>
@@ -313,7 +346,7 @@ function ActionCenter({ state, matching, data, save, onEmployee, onReview }) {
 <p>Instellingen zijn gewijzigd nadat deze maand werd verwerkt.</p>
 </div>
 <button className="primary" onClick={() => save('matching_refresh', { run_id: matching.run_id })}>Nu herberekenen</button>
-</div>}<IgnoredEmployees state={state} matching={matching} save={save} />{unresolvedAgents.map(agent => agent.status === 'UNMATCHED_EMPLOYEE' ? <NewEmployeeForm key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} /> : <AgentResolution key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} />)}{unmatchedLocations.map(location => <LocationResolution key={`${location.customer}-${location.physical_location}`} location={location} matching={matching} state={state} save={save} />)}{payroll.map(employee => <PayrollResolution key={employee.planet_id} employee={employee} save={save} />)}{(matching?.route_issues || []).map((issue, index) => { const worker = state.workers.find(item => item.name === issue.worker); return <div className="resolution-card inline-resolution" key={`${issue.worker}-${index}`}>
+</div>}<IgnoredEmployees state={state} matching={matching} save={save} />{unresolvedAgents.map(agent => agent.status === 'UNMATCHED_EMPLOYEE' ? <NewEmployeeForm key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} /> : <AgentResolution key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} />)}{adHocLocations.map(location => <AdHocLocationResolution key={`event-${location.movement_id}-${location.source_row}`} location={location} matching={matching} state={state} save={save} />)}{unmatchedLocations.map(location => <LocationResolution key={`${location.customer}-${location.physical_location}`} location={location} matching={matching} state={state} save={save} />)}{payroll.map(employee => <PayrollResolution key={employee.planet_id} employee={employee} save={save} />)}{(matching?.route_issues || []).map((issue, index) => { const worker = state.workers.find(item => item.name === issue.worker); return <div className="resolution-card inline-resolution" key={`${issue.worker}-${index}`}>
 <div>
 <span className="priority">Midden</span>
 <h3>{issue.worker}</h3>

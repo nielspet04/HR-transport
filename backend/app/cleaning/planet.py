@@ -12,6 +12,10 @@ def normalize_remark(value: str | None) -> str:
     return (value or "").strip().casefold()
 
 
+def is_event_ad_hoc(customer: str | None) -> bool:
+    return (customer or "").strip().casefold() == "event ad hoc"
+
+
 @dataclass(frozen=True, slots=True)
 class CleaningPolicy:
     """Explicit HR-confirmed extra exclusions, supplied by the caller."""
@@ -118,7 +122,7 @@ def clean_import(imported: ImportResult, *,
     policy = policy if policy is not None else CleaningPolicy()
     excluded = set(policy.excluded_remarks)
     ghost_ids = set(policy.ghost_employee_ids)
-    groups: dict[tuple[str, date, tuple[str, str]], list[Shift]] = {}
+    groups: dict[tuple[str, date, tuple[str, ...]], list[Shift]] = {}
     removals: list[Removal] = []
     unresolved: list[Shift] = []
     telework_rows = excluded_rows = 0
@@ -142,8 +146,12 @@ def clean_import(imported: ImportResult, *,
         # Only explicit confirmed aliases share a physical location. Names not
         # in the mapping remain exact and in a separate namespace (no collision
         # with a source customer literally named LUCHTHAVEN).
-        mapped = policy.location_for(shift.customer, shift.day)
-        location_key = ("mapped", mapped) if mapped is not None else ("customer", shift.customer)
+        # Event ad hoc represents a venue for this one source shift, not one
+        # reusable customer location. The source row keeps even same-day,
+        # same-worker events separate until HR identifies the real venue.
+        mapped = None if is_event_ad_hoc(shift.customer) else policy.location_for(shift.customer, shift.day)
+        location_key = (("event_ad_hoc", shift.customer, str(shift.source_row)) if is_event_ad_hoc(shift.customer)
+                        else ("mapped", mapped) if mapped is not None else ("customer", shift.customer))
         key = (shift.employee_id, shift.day, location_key)
         if key in groups:
             removals.append(Removal("DUPLICATE_MOVEMENT", shift))

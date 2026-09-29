@@ -92,7 +92,9 @@ def match_import(imported,config,location_config,ignored_employee_ids=()):
     movements=[];locations={}
     for index,m in enumerate(cleaned.movements,1):
         first=m.source_shifts[0];agent=agents[first.employee_id]
-        matches=location_index.get(key(m.physical_location),set())
+        from app.cleaning.planet import is_event_ad_hoc
+        ad_hoc=any(is_event_ad_hoc(shift.customer) for shift in m.source_shifts)
+        matches=set() if ad_hoc else location_index.get(key(m.physical_location),set())
         # Distinct stored spellings normalized to one site are one matching
         # location, but all relevant route alternatives remain available.
         location=sorted(matches)[0] if matches else None
@@ -127,7 +129,12 @@ def match_import(imported,config,location_config,ignored_employee_ids=()):
             'source_shifts':[{'row':s.source_row,'customer':s.customer,'task':s.task,'start':s.start_time.isoformat(timespec='minutes'),
                 'end':s.end_time.isoformat(timespec='minutes'),'end_day_offset':s.end_time_day_offset} for s in m.source_shifts]})
         for s in m.source_shifts:
-            locations[s.customer]={'customer':s.customer,'physical_location':m.physical_location,'reference_location':location,'status':location_status}
+            location_id=(key(s.customer),s.source_row) if is_event_ad_hoc(s.customer) else (key(s.customer),)
+            locations[location_id]={'customer':s.customer,'physical_location':m.physical_location,
+                'reference_location':location,'status':location_status,'movement_id':index,
+                'is_ad_hoc':is_event_ad_hoc(s.customer),'day':s.day.isoformat(),
+                'start':s.start_time.isoformat(timespec='minutes'),'end':s.end_time.isoformat(timespec='minutes'),
+                'end_day_offset':s.end_time_day_offset,'planet_id':s.employee_id,'source_row':s.source_row}
     report=cleaned.report
     excluded_rows={r.shift.source_row for r in cleaned.removals if r.reason in ('GHOST_AGENT','TELEWORK','CONFIRMED_EXCLUDED_REMARK')}
     # Duplicate source shifts remain evidence inside each physical movement.
@@ -136,7 +143,7 @@ def match_import(imported,config,location_config,ignored_employee_ids=()):
     return {'month':imported.report.selected_month,'created_at':datetime.now(timezone.utc).isoformat(),'source_sha256':imported.report.source_sha256,
         'source_manifest':source_manifest,
         'calculation':calculate_month(movements,config.get('car_tariffs',[])),
-        'configuration_digest':configuration_digest(config),'agents':list(agents.values()),'locations':sorted(locations.values(),key=lambda r:r['customer']),
+        'configuration_digest':configuration_digest(config),'agents':list(agents.values()),'locations':sorted(locations.values(),key=lambda r:(r['customer'],r.get('day') or '',r.get('start') or '',r.get('source_row') or 0)),
         'movements':movements,'summary':{'agents':len(agents),'movements':len(movements),'source_shifts':sum(len(m.source_shifts) for m in cleaned.movements),
             'statuses':dict(Counter(m['status'] for m in movements)),'input_rows':report.input_rows,
             'ghosts':report.ghost_agent_rows-ignored_rows,'ignored_agents':len(ignored_ids),

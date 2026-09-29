@@ -168,6 +168,16 @@ def test_airport_does_not_merge_other_workers_days_or_unknown_customers():
     assert result.report.remaining_movements == 6
 
 
+def test_each_event_ad_hoc_source_shift_stays_a_separate_movement():
+    rows=(shift(customer='Event ad hoc',start_time=time(18),end_time=time(22)),
+          shift(3,customer=' EVENT AD HOC ',start_time=time(22),end_time=time(23,30)))
+    result=clean_import(imported(*rows))
+    assert result.report.remaining_movements==2
+    assert result.report.duplicate_rows==0
+    assert [movement.source_shifts for movement in result.movements]==[(rows[0],),(rows[1],)]
+    assert [movement.physical_location.strip().casefold() for movement in result.movements]==['event ad hoc','event ad hoc']
+
+
 def test_location_mapping_configurable_and_conflicts_rejected():
     source = imported(shift(customer="DELTA AIRLINES"),shift(3,customer="TUI"))
     assert clean_import(source,policy=CleaningPolicy(location_aliases=())).report.remaining_movements == 2

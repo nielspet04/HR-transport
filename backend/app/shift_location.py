@@ -39,6 +39,9 @@ def apply_choices(db,config,payload):
         agent=agents[movement['planet_id']];worker_id=agent.get('worker_id')
         movement.update(original_location=original,location=location,location_status='MATCHED',
             location_corrected=True,location_correction_reason=choice['reason'])
+        for item in payload.get('locations',[]):
+            if item.get('movement_id')==movement.get('id'):
+                item.update(reference_location=location,status='MATCHED',location_corrected=True)
         route_rows=[route for route in config.get('routes',[])
             if route['worker_id']==worker_id and route['location_key']==norm(location)]
         available=[]

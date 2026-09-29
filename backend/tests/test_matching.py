@@ -1,6 +1,6 @@
 """Phase 4 acceptance: normalization, ambiguity, month scope, no trip fan-out."""
 from dataclasses import replace
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 import json
 import os
@@ -52,6 +52,17 @@ def test_missing_location_and_missing_employee_location_are_distinct():
     c=config();c['workers'].append({'id':2,'name':'Other Agent'})
     missing=match_import(imported(shift(last_name='Other',first_name='Agent',customer='TUI')),c,RULES)
     assert missing['movements'][0]['status']=='UNMATCHED_EMPLOYEE_LOCATION'
+
+
+def test_event_ad_hoc_produces_one_dated_action_per_source_shift():
+    data=imported(shift(customer='Event ad hoc',start_time=time(18),end_time=time(22)),
+                  shift(3,customer='Event ad hoc',start_time=time(22),end_time=time(23,30)))
+    result=match_import(data,config(),RULES)
+    assert len(result['movements'])==2
+    assert all(movement['status']=='UNMATCHED_LOCATION' for movement in result['movements'])
+    assert [(item['movement_id'],item['day'],item['start'],item['end']) for item in result['locations']]==[
+        (1,'2026-08-01','18:00','22:00'),(2,'2026-08-01','22:00','23:30')]
+    assert all(item['is_ad_hoc'] for item in result['locations'])
 
 
 def test_collision_and_changed_name_guard_are_ambiguous():
