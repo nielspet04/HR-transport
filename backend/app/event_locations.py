@@ -7,7 +7,7 @@ from app.configuration.location_addresses import catalog, save as save_location_
 from app.configuration.store import required, valid_day
 from app.importers.reference import norm
 from app.shift_location import movement_key
-from app.transport_defaults import MODES
+from app.transport_defaults import MODES, effective as effective_transport
 
 
 def refresh_actions(payload):
@@ -51,21 +51,32 @@ def save(store, data, revision):
         if start>day:raise ValueError('De locatie moet uiterlijk op de shiftdatum geldig zijn.')
         known={item['key']:item for item in catalog(db)}
         target=required(data.get('location'));target_key=norm(target)
-        created_route=None
+        created_route=None;mode=data.get('mode')
         if choice=='EXISTING':
             if target_key not in known:raise ValueError('Kies een bestaande fysieke locatie uit de lijst.')
             target=known[target_key]['name']
         else:
             if target_key in known:raise ValueError('Deze fysieke locatie bestaat al. Kies bestaande locatie.')
-            mode=data.get('mode')
-            if mode not in MODES:raise ValueError('Kies het standaardvervoer voor de nieuwe locatie.')
-            created_route=db.execute('''INSERT INTO routes(worker_id,location,location_key,mode,mode_key)
-                VALUES(?,?,?,?,?)''',(agent['worker_id'],target,target_key,mode,norm(mode))).lastrowid
-            store.version(db,created_route,start,None,reason,allow_missing=True)
+        defaults=[dict(item) for item in db.execute('SELECT * FROM transport_defaults ORDER BY id')]
+        current=effective_transport(defaults,agent['worker_id'],target,day)
+        if not current:
+            if mode not in MODES:raise ValueError('Kies het standaardvervoer van deze werknemer voor de eventlocatie.')
+            route=db.execute('SELECT id FROM routes WHERE worker_id=? AND location_key=? AND mode_key=?',
+                (agent['worker_id'],target_key,norm(mode))).fetchone()
+            if route:
+                created_route=route['id']
+                if not db.execute('SELECT 1 FROM versions WHERE route_id=? AND valid_from<=?',
+                    (created_route,start)).fetchone():
+                    store.version(db,created_route,start,None,reason,allow_missing=True,allow_historical=True)
+            else:
+                created_route=db.execute('''INSERT INTO routes(worker_id,location,location_key,mode,mode_key)
+                    VALUES(?,?,?,?,?)''',(agent['worker_id'],target,target_key,mode,norm(mode))).lastrowid
+                store.version(db,created_route,start,None,reason,allow_missing=True)
             now=datetime.now(timezone.utc).isoformat()
             db.execute('''INSERT INTO transport_defaults
                 (worker_id,location,location_key,mode,valid_from,reason,changed_at)
                 VALUES(?,?,?,?,?,?,?)''',(agent['worker_id'],target,target_key,mode,start,reason,now))
+        if choice=='NEW':
             address=data.get('address')
             if not isinstance(address,dict) or not address.get('country'):
                 raise ValueError('Vul het volledige locatieadres en de landcode in.')

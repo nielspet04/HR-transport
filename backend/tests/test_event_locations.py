@@ -45,7 +45,7 @@ def test_legacy_single_location_entry_is_rebuilt_as_two_event_actions(tmp_path,m
 def test_existing_location_resolves_only_selected_event_shift(tmp_path,monkeypatch):
     store,run,_=prepared(tmp_path,monkeypatch)
     store.apply('event_location_choice',{'run_id':run,'movement_id':1,'choice':'EXISTING',
-        'location':'LUCHTHAVEN','valid_from':'2026-09-12','reason':'Bekende eventlocatie'},
+        'location':'LUCHTHAVEN','valid_from':'2026-09-12','mode':'Privé auto','reason':'Bekende eventlocatie'},
         store.snapshot()['revision'])
     matching=store.get_matching(run)
     assert matching['movements'][0]['location']=='LUCHTHAVEN'
@@ -69,3 +69,30 @@ def test_new_event_location_creates_address_route_and_default(tmp_path,monkeypat
     matching=store.get_matching(run)
     assert matching['movements'][1]['location']=='Feestzaal Noord'
     assert matching['movements'][0]['location_status']=='UNMATCHED_LOCATION'
+
+
+def test_second_worker_gets_missing_profile_when_reusing_new_event_location(tmp_path,monkeypatch):
+    store,run,first_worker=prepared(tmp_path,monkeypatch)
+    store.apply('route_add',{'name':'Voorbeeld Sam','location':'Basis','mode':'Dienstwagen',
+        'kms':'0','valid_from':'2026-01-01','reason':'Test'},store.snapshot()['revision'])
+    second_worker=next(item['id'] for item in store.snapshot()['workers'] if item['id']!=first_worker)
+    with store.transaction() as db:
+        payload=json.loads(db.execute('SELECT payload FROM matching_runs WHERE id=?',(run,)).fetchone()[0])
+        payload['agents'].append({'planet_id':'200','source_names':['Voorbeeld Sam'],
+            'source_keys':['voorbeeld sam'],'worker_id':second_worker,'worker_name':'Voorbeeld Sam',
+            'status':'MATCHED','method':'NORMALIZED_NAME','suggestions':[]})
+        payload['movements'][1]['planet_id']='200';payload['locations'][1]['planet_id']='200'
+        db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(payload),run))
+    store.apply('event_location_choice',{'run_id':run,'movement_id':1,'choice':'NEW',
+        'location':'Feestzaal Gedeeld','valid_from':'2026-09-12','mode':'Privé auto',
+        'address':{'street':'Marktstraat','number':'7','unit':'','postal_code':'1000',
+            'city':'Brussel','country':'BE'},'reason':'Eerste eventshift'},store.snapshot()['revision'])
+    store.apply('event_location_choice',{'run_id':run,'movement_id':2,'choice':'EXISTING',
+        'location':'Feestzaal Gedeeld','valid_from':'2026-09-12','mode':'Dienstwagen',
+        'reason':'Tweede werknemer op dezelfde fuif'},store.snapshot()['revision'])
+    state=store.snapshot()
+    route=next(item for item in state['routes'] if item['worker_id']==second_worker and item['location']=='Feestzaal Gedeeld')
+    default=next(item for item in state['transport_defaults'] if item['worker_id']==second_worker and item['location']=='Feestzaal Gedeeld')
+    assert route['mode']=='Dienstwagen' and default['mode']=='Dienstwagen'
+    matching=store.get_matching(run)
+    assert matching['movements'][1]['status']=='MATCHED'

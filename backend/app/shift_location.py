@@ -41,7 +41,7 @@ def apply_choices(db,config,payload):
             location_corrected=True,location_correction_reason=choice['reason'])
         for item in payload.get('locations',[]):
             if item.get('movement_id')==movement.get('id'):
-                item.update(reference_location=location,status='MATCHED',location_corrected=True)
+                item.update(reference_location=location,location_corrected=True)
         route_rows=[route for route in config.get('routes',[])
             if route['worker_id']==worker_id and route['location_key']==norm(location)]
         available=[]
@@ -64,8 +64,11 @@ def apply_choices(db,config,payload):
         movement['route_status']='AVAILABLE' if available else 'NO_EFFECTIVE_ROUTE'
         agent_status=agent.get('status',movement.get('employee_status','MATCHED'))
         if agent_status!='MATCHED':movement['status']=agent_status
-        elif not route_rows and not default:movement['status']='UNMATCHED_EMPLOYEE_LOCATION'
+        elif not available:movement['status']='UNMATCHED_EMPLOYEE_LOCATION'
         else:movement['status']='MATCHED'
+        for item in payload.get('locations',[]):
+            if item.get('movement_id')==movement.get('id'):
+                item['status']=movement['status']
     return payload
 
 
