@@ -54,8 +54,15 @@ def test_groups_car_by_shift_amount_but_bicycle_by_monthly_kms_and_rate():
         ('25', 2, 6.7, 'LUCHTHAVEN'), ('26', 1, 7.5, 'LUCHTHAVEN'),
         ('26', 1, 7.5, 'POSTNL'), ('4864', 1, 7.5, 'POSTNL'),
         ('420', 34, 0.37, 'Fiets · LUCHTHAVEN / POSTNL')]
-    assert all(row[2] == '00123' and row[4] == date(2026, 8, 1) for row in rows)
+    assert all(row[2] == '00123' and row[4] == date(2026, 8, 31) for row in rows)
     assert all(row[14] == date(2026, 8, 1) and row[15] == date(2026, 8, 31) for row in rows)
+
+
+def test_payroll_period_is_last_calendar_day_in_leap_february():
+    data=payload();data['month']='2028-02'
+    rows=payroll_rows(data)
+    assert all(row[4]==date(2028,2,29) for row in rows)
+    assert all(row[14]==date(2028,2,1) and row[15]==date(2028,2,29) for row in rows)
 
 
 def test_bicycle_rate_change_within_month_gets_separate_safe_rows():
@@ -88,7 +95,7 @@ def test_replaces_examples_and_preserves_template_structure_and_styles():
     assert sheet['C2'].value == '00123' and sheet['C2'].data_type == 's'
     assert sheet['H2'].value == 2 and sheet['H2'].data_type == 'n'
     assert sheet['I2'].value == 6.7 and sheet['I2'].data_type == 'n'
-    assert sheet['E2'].value.date() == date(2026, 8, 1)
+    assert sheet['E2'].value.date() == date(2026, 8, 31)
     assert sheet.auto_filter.ref == f'A1:XFD{sheet.max_row}'
     with ZipFile(BytesIO(original)) as source, ZipFile(BytesIO(result)) as exported:
         assert 'xl/worksheets/sheet2.xml' not in exported.namelist()

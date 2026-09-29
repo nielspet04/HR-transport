@@ -73,10 +73,11 @@ def payroll_rows(payload):
         raise ValueError('Iedere werknemer moet de hele maand één geldig extern loonnummer hebben.')
     try:
         year, month = (int(part) for part in payload['month'].split('-'))
-        period = date(year, month, 1)
+        start = date(year, month, 1)
     except (KeyError, ValueError, AttributeError):
         raise ValueError('De geselecteerde loonmaand is ongeldig.') from None
     end = date(year, month, monthrange(year, month)[1])
+    period = end
     movements = {movement['id']: movement for movement in payload.get('movements', [])}
     agents = {agent['planet_id']: agent for agent in payload.get('agents', [])}
     employees = {employee['worker_id']: employee for employee in monthly.get('employees', [])}
@@ -129,13 +130,13 @@ def payroll_rows(payload):
         groups.items(), key=lambda item: (item[0][2].casefold(), order[item[0][3]], item[0][4].casefold(), item[0][5])
     ):
         rows.append([None, 'c', reference, str(name), period, None, code, units, float(amount),
-                     None, None, None, None, location, period, end])
+                     None, None, None, None, location, start, end])
     for (_, reference, name, code, rate), group in sorted(
         bicycle_groups.items(), key=lambda item: (item[0][2].casefold(), item[0][4])
     ):
         locations = ' / '.join(sorted(group['locations'], key=str.casefold))
         rows.append([None, 'c', reference, str(name), period, None, code, float(group['kms']), float(rate),
-                     None, None, None, None, f'Fiets · {locations}', period, end])
+                     None, None, None, None, f'Fiets · {locations}', start, end])
     rows.sort(key=lambda row:(str(row[3]).casefold(),order[str(row[6])],str(row[13]).casefold(),Decimal(str(row[8]))))
     grouped_total = sum(((Decimal(str(row[7])) * Decimal(str(row[8]))).quantize(Decimal('.01')) for row in rows), Decimal('0'))
     expected = _amount(monthly.get('calculated_total'))
