@@ -17,6 +17,7 @@ def payload():
         {'id': 5, 'planet_id': 'p1', 'day': '2026-08-05', 'location': 'POSTNL'},
         {'id': 6, 'planet_id': 'p1', 'day': '2026-08-06', 'location': 'POSTNL'},
         {'id': 7, 'planet_id': 'p1', 'day': '2026-08-07', 'location': 'POSTNL'},
+        {'id': 8, 'planet_id': 'p1', 'day': '2026-08-08', 'location': 'LUCHTHAVEN'},
     ]
     rows = [
         {'movement_id': 1, 'status': 'CALCULATED', 'amount': '6.70', 'tariff_kind': 'STANDARD'},
@@ -24,13 +25,16 @@ def payload():
         {'movement_id': 3, 'status': 'CALCULATED', 'amount': '7.50', 'tariff_kind': 'SPECIAL'},
         {'movement_id': 4, 'status': 'CALCULATED', 'amount': '7.50', 'tariff_kind': 'EXTRA48'},
         {'movement_id': 5, 'status': 'CALCULATED', 'amount': '7.50', 'tariff_kind': 'SPECIAL'},
-        {'movement_id': 6, 'status': 'CALCULATED', 'amount': '8.14', 'tariff_kind': 'BICYCLE'},
+        {'movement_id': 6, 'status': 'CALCULATED', 'amount': '8.14', 'tariff_kind': 'BICYCLE',
+         'reimbursed_kms': '22', 'rate_per_km': '0.37'},
         {'movement_id': 7, 'status': 'EXCLUDED_TELEWORK', 'amount': None},
+        {'movement_id': 8, 'status': 'CALCULATED', 'amount': '4.44', 'tariff_kind': 'BICYCLE',
+         'reimbursed_kms': '12', 'rate_per_km': '0.37'},
     ]
     return {'month': '2026-08', 'stale': False,
         'agents': [{'planet_id': 'p1', 'worker_id': 10}], 'movements': movements,
         'calculation': {'rows': rows, 'monthly': {'ready': True, 'external_references_ready': True,
-            'calculated_total': '44.04', 'employees': [{'worker_id': 10, 'name': 'Voorbeeld Alex',
+            'calculated_total': '48.48', 'employees': [{'worker_id': 10, 'name': 'Voorbeeld Alex',
                 'external_reference': '00123', 'external_reference_status': 'READY'}]}}}
 
 
@@ -44,14 +48,22 @@ def template_bytes():
     stream = BytesIO(); workbook.save(stream); workbook.close(); return stream.getvalue()
 
 
-def test_groups_by_worker_location_code_and_exact_amount():
+def test_groups_car_by_shift_amount_but_bicycle_by_monthly_kms_and_rate():
     rows = payroll_rows(payload())
     assert [(row[6], row[7], row[8], row[13]) for row in rows] == [
         ('25', 2, 6.7, 'LUCHTHAVEN'), ('26', 1, 7.5, 'LUCHTHAVEN'),
         ('26', 1, 7.5, 'POSTNL'), ('4864', 1, 7.5, 'POSTNL'),
-        ('420', 1, 8.14, 'POSTNL')]
+        ('420', 34, 0.37, 'Fiets · LUCHTHAVEN / POSTNL')]
     assert all(row[2] == '00123' and row[4] == date(2026, 8, 1) for row in rows)
     assert all(row[14] == date(2026, 8, 1) and row[15] == date(2026, 8, 31) for row in rows)
+
+
+def test_bicycle_rate_change_within_month_gets_separate_safe_rows():
+    data=payload();last=data['calculation']['rows'][-1]
+    last.update(amount='4.56',rate_per_km='0.38')
+    data['calculation']['monthly']['calculated_total']='48.60'
+    bicycle=[row for row in payroll_rows(data) if row[6]=='420']
+    assert sorted((row[7],row[8]) for row in bicycle)==[(12.0,0.38),(22.0,0.37)]
 
 
 @pytest.mark.parametrize('change,message', [

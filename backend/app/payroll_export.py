@@ -51,8 +51,18 @@ def _amount(value):
     return result
 
 
+def _bicycle_value(value, label):
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(f'Een fietsvergoeding heeft geen geldige {label}.') from None
+    if not result.is_finite() or result < 0 or result > Decimal('100000'):
+        raise ValueError(f'Een fietsvergoeding heeft een ongeldige {label}.')
+    return result
+
+
 def payroll_rows(payload):
-    """Group every paid movement by worker, location, pay code and exact amount."""
+    """Group car shifts by amount; aggregate bicycle kilometers per worker/rate."""
     calculation = payload.get('calculation') or {}
     monthly = calculation.get('monthly') or {}
     if payload.get('stale'):
@@ -71,6 +81,7 @@ def payroll_rows(payload):
     agents = {agent['planet_id']: agent for agent in payload.get('agents', [])}
     employees = {employee['worker_id']: employee for employee in monthly.get('employees', [])}
     groups = Counter()
+    bicycle_groups = {}
     calculated_total = Decimal('0')
     calculated_count = 0
     for result in calculation.get('rows', []):
@@ -95,8 +106,19 @@ def payroll_rows(payload):
         location = str(movement.get('location') or movement.get('source_location') or '').strip()
         if not location:
             raise ValueError('Een berekende shift heeft geen fysieke locatie.')
-        key = (worker_id, employee['external_reference'], employee['name'], code, location, amount)
-        groups[key] += 1
+        if kind == 'BICYCLE':
+            kms = _bicycle_value(result.get('reimbursed_kms'), 'aantal vergoede kilometers')
+            rate = _bicycle_value(result.get('rate_per_km'), 'kilometertarief')
+            if kms <= 0 or rate <= 0:
+                raise ValueError('Een fietsvergoeding vereist positieve kilometers en een positief kilometertarief.')
+            if (kms * rate).quantize(Decimal('.01')) != amount:
+                raise ValueError('Een fietsvergoeding sluit niet aan op kilometers × kilometertarief.')
+            key = (worker_id, employee['external_reference'], employee['name'], code, rate)
+            group = bicycle_groups.setdefault(key, {'kms': Decimal('0'), 'locations': set()})
+            group['kms'] += kms; group['locations'].add(location)
+        else:
+            key = (worker_id, employee['external_reference'], employee['name'], code, location, amount)
+            groups[key] += 1
         calculated_total += amount
         calculated_count += 1
     if not calculated_count:
@@ -108,7 +130,14 @@ def payroll_rows(payload):
     ):
         rows.append([None, 'c', reference, str(name), period, None, code, units, float(amount),
                      None, None, None, None, location, period, end])
-    grouped_total = sum((Decimal(str(row[7])) * Decimal(str(row[8])) for row in rows), Decimal('0'))
+    for (_, reference, name, code, rate), group in sorted(
+        bicycle_groups.items(), key=lambda item: (item[0][2].casefold(), item[0][4])
+    ):
+        locations = ' / '.join(sorted(group['locations'], key=str.casefold))
+        rows.append([None, 'c', reference, str(name), period, None, code, float(group['kms']), float(rate),
+                     None, None, None, None, f'Fiets · {locations}', period, end])
+    rows.sort(key=lambda row:(str(row[3]).casefold(),order[str(row[6])],str(row[13]).casefold(),Decimal(str(row[8]))))
+    grouped_total = sum(((Decimal(str(row[7])) * Decimal(str(row[8]))).quantize(Decimal('.01')) for row in rows), Decimal('0'))
     expected = _amount(monthly.get('calculated_total'))
     if calculated_total != expected or grouped_total != expected:
         raise ValueError('Exportcontrole mislukt: de gegroepeerde regels sluiten niet aan op het maandtotaal.')
