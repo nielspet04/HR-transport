@@ -80,6 +80,11 @@ def make_server(store,port=8765):
                     run=int(query.get('run_id',[''])[0])
                     return self.reply(200,workbook_bytes(store,run),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','werknemersafstanden-controle.xlsx')
                 except ValueError as error:return self.reply(400,json.dumps({'error':str(error)}))
+            if urlsplit(self.path).path=='/api/technical/employee-distances-export':
+                query=parse_qs(urlsplit(self.path).query)
+                if not secrets.compare_digest(query.get('csrf',[''])[0],token):return self.reply(403,'{}')
+                from app.employee_distance_export import workbook_bytes
+                return self.reply(200,workbook_bytes(store),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','WERKNEMERS-MAPBOX-HANDMATIG.xlsx')
             if urlsplit(self.path).path in ('/api/routing/preview','/api/routing/map-background'):
                 from app.route_preview import preview,background
                 query=parse_qs(urlsplit(self.path).query)
