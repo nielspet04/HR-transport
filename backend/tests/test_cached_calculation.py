@@ -39,6 +39,20 @@ def test_auto_default_cached_not_manual_train_or_bike(tmp_path,monkeypatch):
     assert store.get_matching(run)['calculation']['rows'][0]['amount']=='7.38'
 
 
+def test_changed_default_immediately_replaces_stored_import_route(tmp_path,monkeypatch):
+    store,run,p,wid=setup_case(tmp_path,monkeypatch)
+    location=p['movements'][0]['location']
+    store.apply('transport_default',{'worker_id':wid,'location':location,
+        'mode':'Dienstwagen','valid_from':'2026-02-01','reason':'Dienstwagen bevestigd'},
+        store.snapshot()['revision'])
+    matching=store.get_matching(run)
+    movement=matching['movements'][0]
+    row=matching['calculation']['rows'][0]
+    assert [route['mode'] for route in movement['routes']]==['Dienstwagen']
+    assert row['status']=='EXCLUDED_COMPANY_CAR'
+    assert row['selected_mode']=='Dienstwagen' and row['amount'] is None
+
+
 def test_one_shift_changed_from_car_to_bicycle_requests_separate_cycling_route(tmp_path,monkeypatch):
     store,run,p,wid=setup_case(tmp_path,monkeypatch)
     driving=next(item for item in store.snapshot()['route_distances'] if item['profile']=='driving')

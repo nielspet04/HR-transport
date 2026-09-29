@@ -361,6 +361,8 @@ class RouteStore(Store):
         if db is not None:
             from app.shift_location import apply_choices
             apply_choices(db,config,payload)
+            from app.transport_defaults import apply_to_payload
+            apply_to_payload(config,payload)
         for movement in payload['movements']:
             movement['routes']=[display_route(r) for r in movement.get('routes',[])]
         if 'calculation' in payload and payload['configuration_digest']==configuration_digest(config):

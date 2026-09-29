@@ -86,14 +86,18 @@ def calculate_cached_month(db,config,run_id,payload,allow_stale=False):
                       direct_transfer_override=leg.get('direct_transfer_override',False),
                       direct_transfer_scope=(itinerary_choices.get(m['id']) or {}).get('scope') if leg.get('direct_transfer_override') else None,
                       direct_transfer_employee_default=(itinerary_choices.get(m['id']) or {}).get('employee_default_active',False))
-        result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else 'Dienstwagen' if chosen=='COMPANY_CAR' else 'Mob budget' if chosen=='MOBILITY_BUDGET' else 'Telework' if chosen=='TELEWORK' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
+        available_modes={mode_key(route.get('mode')) for route in available}
+        effective_mode=('Auto' if cars else 'Fiets' if bikes else 'Trein' if 'trein' in available_modes
+            else 'Dienstwagen' if 'dienstwagen' in available_modes else 'Mob budget' if 'mob budget' in available_modes
+            else 'Telework' if 'telework' in available_modes else None)
+        result.update(selected_mode=result.get('selected_mode') or effective_mode,distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
                       travel_kms=selected['kms'] if selected else None,
                       mapbox_route_id=result.get('mapbox_route_id') or (selected['id'] if selected else None),override_reason=result.get('override_reason') or (choice['reason'] if choice else selected.get('override_reason') if selected else None))
         if leg.get('same_location_continuation'):
             result.update(status='EXCLUDED_SAME_LOCATION',amount=None,distance=None,reimbursed_kms=None,
                 distance_factor=None,distance_source=None,mapbox_route_id=None,tariff_kind=None,
                 reason='Aansluitende shift op dezelfde fysieke locatie: dezelfde woon-werkverplaatsing wordt niet dubbel vergoed.')
-        elif plan_error:
+        elif plan_error and not result['status'].startswith('EXCLUDED_'):
             result.update(status='BLOCKED',amount=None,reason=plan_error)
         elif leg.get('error') and chosen!='TELEWORK':
             result.update(status='LATER_PHASE',amount=None,reason=leg['error'])

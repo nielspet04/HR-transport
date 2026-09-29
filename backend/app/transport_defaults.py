@@ -19,6 +19,46 @@ def effective(rows,worker_id,location,day):
     return max(eligible,key=lambda r:(r['valid_from'],r['id'])) if eligible else None
 
 
+def apply_to_payload(config,payload):
+    """Refresh immutable import movements with the currently effective default.
+
+    Matching runs retain the original evidence, but a later HR transport change
+    must immediately govern calculation and route planning. A full source
+    re-import remains necessary to clear the configuration-stale audit flag.
+    """
+    from app.distances import whole_kms
+    from app.transport import km_applicable
+
+    agents={agent['planet_id']:agent for agent in payload.get('agents',[])}
+    for movement in payload.get('movements',[]):
+        agent=agents.get(movement.get('planet_id'),{})
+        worker_id=agent.get('worker_id')
+        location=movement.get('location')
+        day=movement.get('day')
+        if worker_id is None or not location or not day:
+            continue
+        default=effective(config.get('transport_defaults',[]),worker_id,location,day)
+        if not default:
+            continue
+        routes=[]
+        for route in config.get('routes',[]):
+            if route['worker_id']!=worker_id or route['location_key']!=norm(location) or norm(route['mode'])!=norm(default['mode']):
+                continue
+            versions=[version for version in config.get('versions',[])
+                if version['route_id']==route['id'] and version['valid_from']<=day]
+            if not versions:
+                continue
+            version=max(versions,key=lambda item:(item['valid_from'],item['id']))
+            applicable=km_applicable(route['mode'])
+            routes.append({'route_id':route['id'],'mode':route['mode'],
+                'kms':str(whole_kms(version['kms'])) if applicable and version.get('kms') is not None else None,
+                'km_applicable':applicable,'valid_from':version['valid_from']})
+        movement['routes']=routes or [{'route_id':None,'mode':default['mode'],'kms':None,
+            'km_applicable':km_applicable(default['mode']),'valid_from':default['valid_from']}]
+        movement['route_status']='AVAILABLE'
+    return payload
+
+
 def save(store,data,revision):
     mode=data.get('mode');start=valid_day(data.get('valid_from'));reason=required(data.get('reason'));wid=data.get('worker_id');location=required(data.get('location'))
     if mode not in MODES:raise ValueError('Kies privéauto, fiets, trein, dienstwagen of mobiliteitsbudget.')

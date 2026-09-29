@@ -75,6 +75,8 @@ def plan(db, config, run_id, allow_stale=False):
         payload = json.loads(row['payload'])
         from app.shift_location import apply_choices as apply_location_choices
         apply_location_choices(db,config,payload)
+        from app.transport_defaults import apply_to_payload
+        apply_to_payload(config,payload)
         if payload['month'] in excluded_months:continue
         if payload.get('source_sha256') == source and payload['month'] not in months:
             months[payload['month']] = payload
