@@ -835,7 +835,7 @@ function WorkerDialogBase({ workerId, state, onClose, save, children }) {
 {!selectedMode && <option value="" disabled>Kies standaard vervoer…</option>}{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
 </Field>
 <Field label="Geldig vanaf">
-<input name="valid_from" type="date" defaultValue={selectedMonthStart} required />
+<input key={`transport-date-${transport?.id || 'nieuw'}`} name="valid_from" type="date" defaultValue={transport?.valid_from || selectedMonthStart} required />
 </Field>
 <Field label="Reden">
 <input name="reason" defaultValue="Vervoer aangepast door HR" required />
