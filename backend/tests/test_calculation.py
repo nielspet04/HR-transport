@@ -2,9 +2,12 @@
 import base64
 from datetime import date,time
 from decimal import Decimal
+import json
 import pytest
 
+from app import geocoding,routing
 from app.calculation import calculate_movement,pdf_start_tariff,validate_tariff
+from app.configuration.addresses import append_address
 from app.configuration.routes import RouteStore
 from app.matching import match_import
 from app.importers.planet import HEADERS
@@ -123,13 +126,29 @@ def upload_data(tmp_path,day='2026-09-01'):
     return source,{'filename':source.name,'content':base64.b64encode(source.read_bytes()).decode()}
 
 
-def test_upload_automatic_calculation_retained_private_source_and_tariff_versions(tmp_path):
+def test_upload_automatic_calculation_uses_cached_route_and_refreshed_tariff(tmp_path,monkeypatch):
     store=RouteStore(tmp_path/'routes.sqlite3')
     store.apply('route_add',{'name':'Voorbeeld Alex','location':'LUCHTHAVEN','mode':'Auto','kms':'17',
         'valid_from':'2026-02-01','reason':'Test'},0)
+    address={'street':'Teststraat','number':'12','unit':'','postal_code':'1000','city':'Brussel','country':'BE'}
+    destination={**address,'number':'99'}
+    worker_id=store.snapshot()['workers'][0]['id']
+    with store.transaction() as db:
+        append_address(db,worker_id,'2026-02-01',address,'Test')
+        db.execute('INSERT INTO location_address_versions(location_key,location,valid_from,address,changed_at,reason) VALUES(?,?,?,?,?,?)',
+                   ('luchthaven','LUCHTHAVEN','2026-02-01',json.dumps(destination),'test','Test'))
+        for value,status in ((address,'CONFIRMED'),(destination,'REVIEW')):
+            db.execute('INSERT INTO address_geocodes(address_hash,provider,status,result,requested_at) VALUES(?,?,?,?,?)',
+                       (geocoding.fingerprint(value),'mapbox-v6-permanent',status,json.dumps({'longitude':4.3,'latitude':50.8}),'test'))
     source,data=upload_data(tmp_path)
     store.apply('planet_upload',data,store.snapshot()['revision'])
-    old=store.snapshot()['matching'];assert old['month']=='2026-09'
+    pending=store.snapshot()['matching'];assert pending['month']=='2026-09'
+    assert pending['calculation']['rows'][0]['amount'] is None
+    monkeypatch.setattr(routing,'token_value',lambda:'pk.fake')
+    monkeypatch.setattr(routing,'request_distance',lambda *args:{'meters':'17000','kms':'17','alternatives_count':1})
+    route=next(r for r in store.get_route_plan(pending['run_id'])['routes'] if r['profile']=='driving')
+    store.apply('route_distance_request',{'run_id':pending['run_id'],'cache_key':route['cache_key'],'consent':True},store.snapshot()['revision'])
+    old=store.snapshot()['matching']
     assert old['calculation']['rows'][0]['amount']=='7.11'
     source.unlink()  # Refresh uses retained copy, not original Downloads file.
     new=pdf_start_tariff();new['bands'][16]['amount']='8.00'
@@ -137,7 +156,6 @@ def test_upload_automatic_calculation_retained_private_source_and_tariff_version
     assert store.get_matching(old['run_id'])['stale']
     store.apply('matching_refresh',{'run_id':old['run_id']},store.snapshot()['revision'])
     current=store.snapshot()['matching'];assert current['calculation']['rows'][0]['amount']=='8.00'
-    assert store.get_matching(old['run_id'])['calculation']['rows'][0]['amount']=='7.11'
     assert len(store.snapshot()['car_tariffs'])==2
     assert RouteStore(store.path).snapshot()['matching']['calculation']==current['calculation']
 

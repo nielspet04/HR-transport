@@ -44,7 +44,8 @@ def test_onboarding_saves_complete_profile_atomically(tmp_path,monkeypatch):
     assert next(c for c in state['external_reference_candidates'] if c['name']=='Peters Niels')['status']=='LINKED'
     route=next(r for r in state['routes'] if r['worker_id']==worker['id'])
     assert route['location']=='LUCHTHAVEN' and route['mode']=='Privé auto'
-    assert next(t for t in state['transport_defaults'] if t['worker_id']==worker['id'])['valid_from']=='2026-08-31'
+    assert next(t for t in state['transport_defaults'] if t['worker_id']==worker['id'])['valid_from']=='2026-08-01'
+    assert next(v for v in state['versions'] if v['route_id']==route['id'])['valid_from']=='2026-08-01'
     assert next(link for link in state['employee_links'] if link['planet_id']=='5009')['worker_id']==worker['id']
 
 

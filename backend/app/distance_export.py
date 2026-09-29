@@ -60,9 +60,16 @@ def export_rows(store, run_id):
             for c in r['contexts']:
                 saved=cached.get(r['cache_key'])
                 lookup[(c['worker_id'],norm(c['location']),c['day'],r['profile'])]=effective_distance(saved,c['worker_id']) if saved else None
+        selected=db.execute('SELECT source_path FROM matching_runs WHERE id=?',(run_id,)).fetchone()
         payloads={}
-        for row in db.execute('SELECT payload FROM matching_runs ORDER BY id DESC'):
+        rows=db.execute('''SELECT r.payload FROM matching_runs r
+            JOIN (SELECT month,max(id) AS id FROM matching_runs
+                WHERE source_path=? GROUP BY month) current ON current.id=r.id
+            ORDER BY r.id DESC''',(selected['source_path'],)).fetchall()
+        for row in rows:
             p=json.loads(row['payload'])
+            from app.shift_location import apply_choices as apply_location_choices
+            apply_location_choices(db,config,p)
             if p.get('source_sha256')==prepared['source_sha256'] and p['month'] in prepared['months']:payloads.setdefault(p['month'],p)
         shift_rows=[]
         for month,p in sorted(payloads.items()):

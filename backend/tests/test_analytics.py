@@ -1,4 +1,5 @@
 from app.analytics import summarize
+from copy import deepcopy
 
 
 def payload(month='2026-08'):
@@ -35,3 +36,17 @@ def test_analytics_keeps_months_separate():
     result = summarize([payload('2026-09'), payload('2026-08')])
     assert [row['month'] for row in result['months']] == ['2026-08', '2026-09']
     assert set(result['employees_by_month']) == {'2026-08', '2026-09'}
+
+
+def test_historical_months_remain_in_analytics_after_later_configuration_change(tmp_path,monkeypatch):
+    from test_cached_calculation import setup_case
+    store,august_run,august,worker_id=setup_case(tmp_path,monkeypatch)
+    september=deepcopy(august);september['month']='2026-09'
+    september['movements'][0]['day']='2026-09-01'
+    with store.transaction() as db:
+        september_run=store.insert_matching(db,september,'/september.xlsx')
+    store.apply('worker_rename',{'worker_id':worker_id,'name':'Gewijzigde naam'},store.snapshot()['revision'])
+    assert store.get_matching(august_run)['stale'] is True
+    analytics=store.get_analytics()
+    assert [item['month'] for item in analytics['months']]==['2026-08','2026-09']
+    assert all(item['cost']!='0.00' and item['shifts']==1 for item in analytics['months'])

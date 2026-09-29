@@ -57,21 +57,28 @@ def coords(geocode):
     return values
 
 
-def plan(db, config, run_id):
-    selected = db.execute('SELECT payload FROM matching_runs WHERE id=?', (run_id,)).fetchone()
+def plan(db, config, run_id, allow_stale=False):
+    selected = db.execute('SELECT payload,source_path FROM matching_runs WHERE id=?', (run_id,)).fetchone()
     if not selected:
         raise ValueError('Selecteer een opgeslagen exportverwerking.')
     seed = json.loads(selected['payload']); source = seed['source_sha256']
     excluded_months={r['month'] for r in db.execute('SELECT month FROM excluded_months')}
     if seed['month'] in excluded_months:raise ValueError('Deze maand is uitgesloten van verwerking.')
     months = {}
-    # Latest snapshot per month for this exact uploaded source.
-    for row in db.execute('SELECT payload FROM matching_runs ORDER BY id DESC'):
+    # Load only the latest snapshot per month for this upload. Previously this
+    # parsed every historical JSON payload in the database on every action.
+    rows=db.execute('''SELECT r.payload FROM matching_runs r
+        JOIN (SELECT month,max(id) AS id FROM matching_runs
+            WHERE source_path=? GROUP BY month) current ON current.id=r.id
+        ORDER BY r.id DESC''',(selected['source_path'],)).fetchall()
+    for row in rows:
         payload = json.loads(row['payload'])
+        from app.shift_location import apply_choices as apply_location_choices
+        apply_location_choices(db,config,payload)
         if payload['month'] in excluded_months:continue
         if payload.get('source_sha256') == source and payload['month'] not in months:
             months[payload['month']] = payload
-    if any(p['configuration_digest'] != configuration_digest(config) for p in months.values()):
+    if not allow_stale and any(p['configuration_digest'] != configuration_digest(config) for p in months.values()):
         raise ValueError('Vernieuw eerst de maandshiften: exportkoppelingen of tarieven zijn gewijzigd.')
     workers = {r['id']:r['name'] for r in config['workers']}
     homes = [dict(r) for r in db.execute('SELECT * FROM worker_addresses')]
@@ -83,8 +90,12 @@ def plan(db, config, run_id):
     for payload in months.values():
         from app.shift_transport import choices as transport_choices
         overrides=transport_choices(db,payload)
+        from app.itinerary_overrides import direct_choices
+        itinerary_choices=direct_choices(db,payload)
         from app.itinerary import itineraries
-        journey=itineraries(payload,{movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'})
+        journey=itineraries(payload,
+            {movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'},
+            {movement_id for movement_id,choice in itinerary_choices.items() if choice['direct_transfer']})
         agents = {a['planet_id']:a for a in payload['agents']}
         for movement in payload['movements']:
             agent = agents[movement['planet_id']]; wid = agent.get('worker_id'); day = movement['day']
@@ -95,6 +106,8 @@ def plan(db, config, run_id):
             leg=journey.get((movement['planet_id'],day,movement.get('id')),{})
             if leg.get('error'):
                 blocked.append({**context,'reason':leg['error']});continue
+            if leg.get('same_location_continuation'):
+                excluded += 1;continue
             from_location=leg.get('origin_location')
             if movement['status'] != 'MATCHED':
                 blocked.append({**context,'reason':'Werknemer/locatie niet gekoppeld.'});continue

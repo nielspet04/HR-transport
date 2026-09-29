@@ -143,6 +143,16 @@ def test_persistent_confirmations_rerun_and_old_snapshot_stale(tmp_path):
     assert RouteStore(store.path).snapshot()['employee_links'][0]['worker_id']==1
 
 
+def test_dashboard_lists_only_latest_run_per_month_but_keeps_history(tmp_path):
+    store,source,run=prepared_store(tmp_path)
+    store.apply('matching_employee',{'run_id':run,'planet_id':'006','worker_id':1,'reason':'HR bevestigt'},store.snapshot()['revision'])
+    visible=store.snapshot()['matching_runs']
+    assert len([item for item in visible if item['month']=='2026-08'])==1
+    with store.connect() as db:
+        assert db.execute("SELECT count(*) FROM matching_runs WHERE month='2026-08'").fetchone()[0]>1
+    assert store.get_matching(run)['run_id']==run
+
+
 def test_missing_source_confirmation_rolls_back(tmp_path):
     store,source,run=prepared_store(tmp_path)
     source.rename(tmp_path/'moved.xlsx');before=store.snapshot()
@@ -178,6 +188,42 @@ def test_confirmation_updates_all_source_months(tmp_path):
     store.apply('matching_employee',{'run_id':august,'planet_id':'006','worker_id':1,'reason':'HR'},store.snapshot()['revision'])
     for row in store.snapshot()['matching_runs'][:2]:
         assert store.get_matching(row['id'])['agents'][0]['status']=='MATCHED'
+
+
+def test_unmatched_stopped_employee_can_be_ignored_for_export_month(tmp_path):
+    store,source,run=prepared_store(tmp_path)
+    store.apply('matching_employee_ignore',{
+        'run_id':run,'planet_id':'006','reason':'Werknemer gestopt'
+    },store.snapshot()['revision'])
+    current=store.snapshot()['matching']
+    assert current['month']=='2026-08'
+    assert current['agents']==[] and current['movements']==[]
+    assert current['summary']['ignored_agents']==1
+    assert current['summary']['ignored_shifts']==1
+    with store.connect() as db:
+        ignored=db.execute('SELECT * FROM matching_employee_ignores').fetchone()
+        assert ignored['month']=='2026-08' and ignored['planet_id']=='006'
+    store.apply('matching_employee_restore',{
+        'run_id':current['run_id'],'planet_id':'006','reason':'Verkeerde uitsluiting hersteld'
+    },store.snapshot()['revision'])
+    restored=store.snapshot()['matching']
+    assert restored['agents'][0]['planet_id']=='006'
+    assert restored['movements'][0]['planet_id']=='006'
+    assert store.snapshot()['employee_ignores']==[]
+
+
+def test_already_linked_stopped_employee_can_also_be_ignored(tmp_path):
+    store,source,run=prepared_store(tmp_path)
+    store.apply('matching_employee',{
+        'run_id':run,'planet_id':'006','worker_id':1,'reason':'HR koppelt werknemer'
+    },store.snapshot()['revision'])
+    linked=store.snapshot()['matching']
+    assert linked['agents'][0]['status']=='MATCHED'
+    store.apply('matching_employee_ignore',{
+        'run_id':linked['run_id'],'planet_id':'006','reason':'Werknemer intussen gestopt'
+    },store.snapshot()['revision'])
+    ignored=store.snapshot()['matching']
+    assert ignored['agents']==[] and ignored['movements']==[]
 
 
 @pytest.mark.skipif(not os.environ.get('PLANET_SOURCE'),reason='Private optional August acceptance')

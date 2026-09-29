@@ -44,15 +44,18 @@ function deriveDashboard(state, matching) {
   const routeGroups = new Map()
   for (const issue of matching.route_issues || []) routeGroups.set(issue.reason || 'Route ontbreekt', (routeGroups.get(issue.reason || 'Route ontbreekt') || 0) + 1)
   for (const [title, count] of routeGroups) actions.push({ level: 'Midden', title, count, kind: 'route' })
+  const calculationGroups = new Map()
+  for (const employee of monthly.employees || []) for (const shift of employee.shifts || []) if (shift.status === 'BLOCKED' || shift.status === 'LATER_PHASE') calculationGroups.set(shift.reason || 'Shiftberekening geblokkeerd', (calculationGroups.get(shift.reason || 'Shiftberekening geblokkeerd') || 0) + 1)
+  for (const [title, count] of calculationGroups) actions.push({ level: 'Hoog', title, count, kind: 'calculation' })
   if (matching.stale) actions.push({ level: 'Hoog', title: 'Maand gebruikt gewijzigde instellingen', count: 1, kind: 'refresh' })
   if (monthly.external_reference_missing) actions.push({ level: 'Hoog', title: 'Loonnummer ontbreekt', count: monthly.external_reference_missing, kind: 'payroll' })
   if (monthly.external_reference_changed) actions.push({ level: 'Hoog', title: 'Loonnummer wijzigde tijdens de maand', count: monthly.external_reference_changed, kind: 'payroll' })
   const automaticStatus = state.automatic_routes?.status
   const processing = ['QUEUED', 'RUNNING'].includes(automaticStatus)
-    && (!monthly.ready || matching.stale || Boolean(state.route_issues?.length))
+    && (!monthly.ready || matching.stale || Boolean(matching.route_issues?.length))
   const ready = monthly.ready && monthly.external_references_ready && !matching.stale
   const status = processing ? 'Routes worden berekend' : actions.length || monthly.blocking ? 'Actie nodig' : ready ? 'Klaar voor Accerta-export' : 'Klaar voor controle'
-  return { month: matching.month, runId: matching.run_id, status, tone: status === 'Actie nodig' ? 'warning' : ready ? 'success' : 'neutral', employees: monthly.employee_count || matching.summary?.agents || 0, movements: matching.summary?.movements || 0, sourceShifts: matching.summary?.source_shifts || 0, excluded: monthly.excluded || 0, total: monthly.calculated_total || 0, actions, step: processing || actions.length ? 2 : ready ? 4 : 3 }
+  return { month: matching.month, runId: matching.run_id, status, tone: status === 'Actie nodig' ? 'warning' : ready ? 'success' : 'neutral', employees: monthly.employee_count || matching.summary?.agents || 0, movements: matching.summary?.movements || 0, sourceShifts: matching.summary?.source_shifts || 0, excluded: (monthly.excluded || 0) + (matching.summary?.ignored_shifts || 0), total: monthly.calculated_total || 0, actions, step: processing || actions.length ? 2 : ready ? 4 : 3 }
 }
 
 function Field({ label, children }) { return <label className="field">
@@ -132,9 +135,16 @@ function ActionList({ items, onResolve }) { if (!items.length) return <div class
 
 function MonthPicker({ state, matching, onChange }) {
   const seen = new Set()
-  const runs = (state.matching_runs || []).filter(run => !seen.has(run.month) && seen.add(run.month))
+  const runs = (state.matching_runs || []).filter(run => !seen.has(run.month) && seen.add(run.month)).sort((left, right) => right.month.localeCompare(left.month))
+  const current = runs.findIndex(run => run.id === matching?.run_id)
+  const newer = current > 0 ? runs[current - 1] : null
+  const older = current >= 0 && current < runs.length - 1 ? runs[current + 1] : null
   return <Field label="Maand">
+<div className="month-picker">
+<button type="button" className="month-step" disabled={!older} onClick={() => older && onChange(older.id)} aria-label="Vorige maand">‹</button>
 <select value={matching?.run_id || ''} onChange={event => onChange(Number(event.target.value))}>{runs.map(run => <option value={run.id} key={run.id}>{monthLabel(run.month)}</option>)}</select>
+<button type="button" className="month-step" disabled={!newer} onClick={() => newer && onChange(newer.id)} aria-label="Volgende maand">›</button>
+</div>
 </Field>
 }
 
@@ -190,10 +200,20 @@ function AgentResolution({ agent, matching, state, save }) {
 </form>
 }
 
+function IgnoredEmployees({ state, matching, save }) {
+  const ignored = (state.employee_ignores || []).filter(item => item.month === matching.month)
+  if (!ignored.length) return null
+  return <section className="resolution-card">
+<div><span className="priority">Genegeerd</span><h3>Uitgesloten werknemers in {monthLabel(matching.month)}</h3><p>Hun shiften tellen niet mee. Een foutieve uitsluiting kan hier worden hersteld.</p></div>
+{ignored.map(item => <button type="button" className="secondary" key={item.planet_id} onClick={() => save('matching_employee_restore', { run_id: matching.run_id, planet_id: item.planet_id, reason: 'Genegeerde werknemer opnieuw opnemen in maandexport' })}>Pl@net {item.planet_id} opnieuw opnemen</button>)}
+</section>
+}
+
 function NewEmployeeForm({ agent, matching, state, save }) {
   const movements = matching.movements.filter(movement => movement.planet_id === agent.planet_id)
   const sources = [...new Set(movements.map(movement => movement.source_location))]
   const firstDay = movements.map(item => item.day).sort()[0]
+  const monthStart = `${matching.month}-01`
   return <details className="resolution-card">
 <summary>Nieuw profiel maken voor {agent.source_names?.[0]}</summary>
 <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('employee_onboard', { run_id: matching.run_id, planet_id: agent.planet_id, name: form.get('name'), valid_from: form.get('valid_from'), external_reference: form.get('external_reference'), address: addressFrom(form, 'home_'), assignments: sources.map((source, index) => ({ source_location: source, location: form.get(`location_${index}`), mode: form.get(`mode_${index}`) })), reason: form.get('reason') }) }}>
@@ -202,7 +222,7 @@ function NewEmployeeForm({ agent, matching, state, save }) {
 <input name="name" defaultValue={agent.source_names?.[0]} required />
 </Field>
 <Field label="Geldig vanaf">
-<input name="valid_from" type="date" defaultValue={firstDay} max={firstDay} required />
+<input name="valid_from" type="date" defaultValue={monthStart} max={firstDay} required />
 </Field>
 <Field label="Extern loonnummer">
 <input name="external_reference" required />
@@ -218,7 +238,10 @@ function NewEmployeeForm({ agent, matching, state, save }) {
 <select name={`location_${index}`} required>
 <option value="">Kies fysieke locatie…</option>{state.physical_locations.map(location => <option key={location.key} value={location.name}>{location.name}</option>)}</select>
 <select name={`mode_${index}`} defaultValue="Privé auto">{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
-</div>)}<button className="primary">Werknemer aanmaken</button>
+</div>)}<div className="candidate-actions">
+<button className="primary">Werknemer aanmaken</button>
+<button type="button" className="secondary" onClick={() => save('matching_employee_ignore', { run_id: matching.run_id, planet_id: agent.planet_id, reason: 'Werknemer gestopt; resterende shiften in deze maandexport genegeerd' })}>Werknemer en shiften negeren</button>
+</div>
 </form>
 </details>
 }
@@ -274,10 +297,11 @@ function PayrollResolution({ employee, save }) {
 </form>
 }
 
-function ActionCenter({ state, matching, data, save, onEmployee }) {
+function ActionCenter({ state, matching, data, save, onEmployee, onReview }) {
   const unresolvedAgents = (matching?.agents || []).filter(agent => agent.status !== 'MATCHED')
   const unmatchedLocations = (matching?.locations || []).filter(location => location.status === 'UNMATCHED_LOCATION')
   const payroll = (matching?.calculation?.monthly?.employees || []).filter(employee => employee.worker_id && employee.external_reference_status !== 'READY')
+  const blockedShifts = (matching?.calculation?.monthly?.employees || []).flatMap(employee => (employee.shifts || []).filter(shift => shift.status === 'BLOCKED' || shift.status === 'LATER_PHASE').map(shift => ({ employee, shift })))
   return <>
 <header className="simple-header">
 <p className="eyebrow">CONTROLE</p>
@@ -289,29 +313,51 @@ function ActionCenter({ state, matching, data, save, onEmployee }) {
 <p>Instellingen zijn gewijzigd nadat deze maand werd verwerkt.</p>
 </div>
 <button className="primary" onClick={() => save('matching_refresh', { run_id: matching.run_id })}>Nu herberekenen</button>
-</div>}{unresolvedAgents.map(agent => agent.status === 'UNMATCHED_EMPLOYEE' ? <NewEmployeeForm key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} /> : <AgentResolution key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} />)}{unmatchedLocations.map(location => <LocationResolution key={`${location.customer}-${location.physical_location}`} location={location} matching={matching} state={state} save={save} />)}{payroll.map(employee => <PayrollResolution key={employee.planet_id} employee={employee} save={save} />)}{(matching?.route_issues || []).map((issue, index) => { const worker = state.workers.find(item => item.name === issue.worker); return <div className="resolution-card inline-resolution" key={`${issue.worker}-${index}`}>
+</div>}<IgnoredEmployees state={state} matching={matching} save={save} />{unresolvedAgents.map(agent => agent.status === 'UNMATCHED_EMPLOYEE' ? <NewEmployeeForm key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} /> : <AgentResolution key={agent.planet_id} agent={agent} matching={matching} state={state} save={save} />)}{unmatchedLocations.map(location => <LocationResolution key={`${location.customer}-${location.physical_location}`} location={location} matching={matching} state={state} save={save} />)}{payroll.map(employee => <PayrollResolution key={employee.planet_id} employee={employee} save={save} />)}{(matching?.route_issues || []).map((issue, index) => { const worker = state.workers.find(item => item.name === issue.worker); return <div className="resolution-card inline-resolution" key={`${issue.worker}-${index}`}>
 <div>
 <span className="priority">Midden</span>
 <h3>{issue.worker}</h3>
 <p>{issue.day} · {issue.location} · {issue.reason}</p>
-</div>{worker ? <button className="secondary" onClick={() => onEmployee(worker.id)}>Werknemer bekijken</button> : <span className="hint">Los eerst de agentkoppeling hierboven op.</span>}</div> })}{!data.actions.length && <ActionList items={[]} />}</>
+</div>{worker ? <button className="secondary" onClick={() => onEmployee(worker.id)}>Werknemer bekijken</button> : <span className="hint">Los eerst de agentkoppeling hierboven op.</span>}</div> })}{blockedShifts.map(({ employee, shift }) => <div className="resolution-card inline-resolution" key={`blocked-${employee.planet_id}-${shift.movement_id}`}>
+<div><span className="priority high">Hoog</span><h3>{employee.name}</h3><p>{shift.date} · {shift.location} · {shift.reason}</p></div>
+<button className="secondary" onClick={onReview}>Shift controleren</button>
+</div>)}{!data.actions.length && <ActionList items={[]} />}</>
 }
 
-function ShiftActions({ shift, matching, save }) {
+function ShiftActions({ shift, matching, locations, save }) {
+  const exceptionalGap = shift.multi_location && shift.sequence > 1 && shift.gap_minutes > 120
+  const employeeDefault = shift.direct_transfer_employee_default === true
+  const dayButton = shift.direct_transfer_override ? (employeeDefault ? 'Alleen deze dag ontkoppelen' : 'Thuisrit herstellen') : (employeeDefault ? 'Alleen deze dag opnieuw koppelen' : 'Niet naar huis · shiften koppelen')
   return <details className="shift-actions">
 <summary>Aanpassen</summary>
 <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('shift_transport_choice', { run_id: matching.run_id, movement_id: shift.movement_id, mode: form.get('mode'), reason: form.get('reason') }) }}>
 <select name="mode" defaultValue="DEFAULT">{shiftModes.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
 <input name="reason" placeholder="Reden vervoerskeuze" required />
 <button className="secondary">Vervoer opslaan</button>
-</form>{shift.status === 'CALCULATED' && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('calculation_amount_correction', { run_id: matching.run_id, movement_id: shift.movement_id, amount: form.get('amount'), reason: form.get('reason') }) }}>
+</form><form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('shift_location_choice', { run_id: matching.run_id, movement_id: shift.movement_id, location: form.get('location'), reason: form.get('reason') }) }}>
+<select name="location" defaultValue={shift.location} required>{(locations || []).map(item => <option value={item.name} key={item.key}>{item.name}</option>)}</select>
+<input name="reason" defaultValue="Foutieve shiftlocatie in Pl@net gecorrigeerd door HR" required />
+<button className="secondary">Shiftlocatie aanpassen</button>
+</form>{shift.location_corrected && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('shift_location_choice', { run_id: matching.run_id, movement_id: shift.movement_id, reset: true, reason: form.get('reason') }) }}>
+<input name="reason" defaultValue="Locatiecorrectie verwijderd; oorspronkelijke Pl@net-locatie herstellen" required />
+<button className="secondary">Oorspronkelijke locatie herstellen</button>
+</form>}{shift.status === 'CALCULATED' && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('calculation_amount_correction', { run_id: matching.run_id, movement_id: shift.movement_id, amount: form.get('amount'), reason: form.get('reason') }) }}>
 <input name="amount" inputMode="decimal" defaultValue={shift.amount} required />
 <input name="reason" placeholder="Reden bedragscorrectie" required />
 <button className="secondary">Bedrag corrigeren</button>
+</form>}{exceptionalGap && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('itinerary_transfer_override', { run_id: matching.run_id, movement_id: shift.movement_id, direct_transfer: !shift.direct_transfer_override, reason: form.get('reason') }) }}>
+<input name="reason" defaultValue={shift.direct_transfer_override ? (employeeDefault ? 'Uitzondering: werknemer ging deze dag wel naar huis tussen beide shiften' : 'HR herstelt thuisrit tussen beide shiften') : 'HR bevestigt dat de agent niet naar huis ging tussen beide shiften'} required />
+<button className="secondary">{dayButton}</button>
+</form>}{exceptionalGap && !employeeDefault && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('itinerary_employee_default', { run_id: matching.run_id, movement_id: shift.movement_id, direct_transfer: true, reason: form.get('reason') }) }}>
+<input name="reason" defaultValue="HR bevestigt dat deze werknemer bij meerdere shiften standaard niet naar huis gaat" required />
+<button className="secondary">Altijd koppelen voor deze werknemer</button>
+</form>}{exceptionalGap && employeeDefault && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('itinerary_employee_default', { run_id: matching.run_id, movement_id: shift.movement_id, direct_transfer: false, reason: form.get('reason') }) }}>
+<input name="reason" defaultValue="HR verwijdert de vaste koppeling; gewone twee-uursregel opnieuw toepassen" required />
+<button className="secondary">Vaste koppeling verwijderen</button>
 </form>}</details>
 }
 
-const statusLabels = { CALCULATED: 'Berekend', BLOCKED: 'Geblokkeerd', LATER_PHASE: 'Later verwerken', EXCLUDED_TRAIN: 'Trein uitgesloten', EXCLUDED_COMPANY_CAR: 'Dienstwagen uitgesloten', EXCLUDED_MOBILITY_BUDGET: 'Mobiliteitsbudget uitgesloten', EXCLUDED_TELEWORK: 'Telewerk' }
+const statusLabels = { CALCULATED: 'Berekend', BLOCKED: 'Geblokkeerd', LATER_PHASE: 'Later verwerken', EXCLUDED_TRAIN: 'Trein uitgesloten', EXCLUDED_COMPANY_CAR: 'Dienstwagen uitgesloten', EXCLUDED_MOBILITY_BUDGET: 'Mobiliteitsbudget uitgesloten', EXCLUDED_TELEWORK: 'Telewerk', EXCLUDED_SAME_LOCATION: 'Zelfde locatie · geen extra rit' }
 const shiftTypeLabels = { STANDARD: 'Gewone auto', SPECIAL: 'Vroeg/laat', EXTRA48: '48u-oproep', BICYCLE: 'Fiets', TRAIN: 'Trein', COMPANY_CAR: 'Dienstwagen', MOBILITY_BUDGET: 'Mobiliteitsbudget', TELEWORK: 'Telewerk', UNRESOLVED: 'Nog te bepalen' }
 function shiftType(shift) {
   if (shift.extra_shift_48h) return 'EXTRA48'
@@ -359,6 +405,12 @@ function CalculationDetails({ shift }) {
 </div>}{shift.override_reason && <div>
 <dt>Vervoerskeuze</dt>
 <dd>{shift.override_reason}</dd>
+</div>}{shift.multi_location && shift.sequence > 1 && <div>
+<dt>Dagroute</dt>
+<dd>{shift.origin_location ? `${shift.origin_location} → ${shift.location}` : `Thuis → ${shift.location}`} · pauze {Math.floor((shift.gap_minutes || 0) / 60)}u{String((shift.gap_minutes || 0) % 60).padStart(2, '0')}{shift.direct_transfer_override ? ' · bevestigd: agent ging niet naar huis' : ''}</dd>
+</div>}{shift.location_corrected && <div>
+<dt>Locatiecorrectie</dt>
+<dd>Pl@net: {shift.original_location} → HR: {shift.location} · {shift.location_correction_reason}</dd>
 </div>}</dl>
 </div>
 }
@@ -390,7 +442,7 @@ function EmployeeCalendar({ month, shifts, selectedMovement, selectedDate, onSel
 </section>
 }
 
-function MonthReview({ matching, save }) {
+function MonthReview({ matching, state, save }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState('ALL')
   const [kind, setKind] = useState('ALL')
@@ -478,7 +530,7 @@ function MonthReview({ matching, save }) {
 <strong>{shortDate(shift.date)}</strong>
 <small>{shift.date}</small>
 </span>
-<strong>{shift.location}</strong>
+<span className="shift-location"><strong>{shift.location}</strong>{shift.location_corrected && <small>Pl@net: {shift.original_location}</small>}</span>
 <span className="mode-pill with-kind">{shift.mode || 'Niet ingesteld'}<small>{shiftTypeLabels[shiftType(shift)]}</small></span>
 <span className={`status-pill ${shift.status === 'CALCULATED' ? 'ok' : shift.status.startsWith('EXCLUDED_') ? 'excluded' : 'problem'}`}>{statusLabels[shift.status] || shift.status}</span>
 <span>{shift.distance == null ? '—' : `${shift.distance} km`}</span>
@@ -486,7 +538,7 @@ function MonthReview({ matching, save }) {
 <button className="details-button" aria-expanded={expanded === shift.movement_id} onClick={event => { event.stopPropagation(); setExpanded(expanded === shift.movement_id ? null : shift.movement_id) }}>{expanded === shift.movement_id ? 'Sluiten' : 'Berekening'}</button>
 </div>{(expanded === shift.movement_id || focusedDate === shift.date) && <div className="shift-detail-panel">
 <CalculationDetails shift={shift} />
-<ShiftActions shift={shift} matching={matching} save={save} />
+<ShiftActions shift={shift} matching={matching} locations={state.physical_locations} save={save} />
 </div>}</article>)}</div>
 </details> })}</div> : <div className="empty">
 <span>⌕</span>
@@ -744,6 +796,12 @@ function WorkerDialogBase({ workerId, state, onClose, save }) {
   const address = latest(state.addresses || [], item => item.worker_id === workerId)
   const reference = latest(state.external_references || [], item => item.worker_id === workerId)
   const routes = state.routes.filter(route => route.worker_id === workerId)
+  const routeGroups = [...routes.reduce((groups, route) => {
+    if (!groups.has(route.location_key)) groups.set(route.location_key, [])
+    groups.get(route.location_key).push(route)
+    return groups
+  }, new Map()).values()]
+  const selectedMonthStart = state.matching?.month ? `${state.matching.month}-01` : today()
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
 <section className="modal">
 <button className="close" onClick={onClose}>×</button>
@@ -755,33 +813,34 @@ function WorkerDialogBase({ workerId, state, onClose, save }) {
 <strong>{reference?.external_reference || 'Ontbreekt'}</strong>
 </div>
 <div>
-<small>Woonplaats</small>
-<strong>{address?.address?.city || 'Ontbreekt'}</strong>
+<small>Woonadres</small>
+<strong>{addressLabel(address?.address)}</strong>
 </div>
 <div>
-<small>Routes</small>
-<strong>{routes.length}</strong>
+<small>Werklocaties</small>
+<strong>{routeGroups.length}</strong>
 </div>
 </div>
 <h3>Vervoer en afstanden</h3>
-<div className="route-list">{routes.map(route => { const version = latest(state.versions || [], item => item.route_id === route.id); const transport = latest(state.transport_defaults || [], item => item.worker_id === workerId && item.location_key === route.location_key); return <details key={route.id}>
+<div className="route-list">{routeGroups.map(group => { const route = group[0]; const transport = latest(state.transport_defaults || [], item => item.worker_id === workerId && item.location_key === route.location_key); const routeModes = [...new Set(group.map(item => item.mode))]; const selectedMode = transport?.mode || (routeModes.length === 1 ? routeModes[0] : ''); return <details key={route.location_key}>
 <summary>
 <strong>{route.location}</strong>
-<span>{transport?.mode || route.mode}</span>
-<b>{version?.kms == null ? 'Geen km-vergoeding' : `${version.kms} km`}</b>
+<span>{transport ? `Standaard: ${transport.mode}` : routeModes.length === 1 ? `Vervoer: ${routeModes[0]}` : 'Standaard nog niet gekozen'}</span>
+<b>{routeModes.join(' / ')}</b>
 </summary>
 <form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('transport_default', { worker_id: workerId, location: route.location, mode: form.get('mode'), valid_from: form.get('valid_from'), reason: form.get('reason') }) }}>
 <Field label="Standaard vervoer">
-<select name="mode" defaultValue={transport?.mode || route.mode}>{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
+<select name="mode" defaultValue={selectedMode} required>
+{!selectedMode && <option value="" disabled>Kies standaard vervoer…</option>}{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
 </Field>
 <Field label="Geldig vanaf">
-<input name="valid_from" type="date" defaultValue={today()} required />
+<input name="valid_from" type="date" defaultValue={selectedMonthStart} required />
 </Field>
 <Field label="Reden">
 <input name="reason" defaultValue="Vervoer aangepast door HR" required />
 </Field>
 <button className="secondary">Vervoer opslaan</button>
-</form>{route.km_applicable && <form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('route_update', { route_id: route.id, kms: form.get('kms'), valid_from: form.get('valid_from'), reason: form.get('reason') }) }}>
+</form>{group.filter(item => item.km_applicable).map(distanceRoute => { const version = latest(state.versions || [], item => item.route_id === distanceRoute.id); return <form className="form-grid" key={distanceRoute.id} onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('route_update', { route_id: distanceRoute.id, kms: form.get('kms'), valid_from: form.get('valid_from'), reason: form.get('reason') }) }}>
 <Field label="Kilometers">
 <input name="kms" inputMode="decimal" defaultValue={version?.kms || ''} required />
 </Field>
@@ -791,8 +850,8 @@ function WorkerDialogBase({ workerId, state, onClose, save }) {
 <Field label="Reden">
 <input name="reason" defaultValue="Afstand aangepast door HR" required />
 </Field>
-<button className="secondary">Afstand opslaan</button>
-</form>}</details>})}</div>
+<button className="secondary">Afstand {distanceRoute.mode} opslaan</button>
+</form>})}</details>})}</div>
 <div className="profile-forms">
 <details>
 <summary>Naam aanpassen</summary>
@@ -878,7 +937,7 @@ function Employees({ state, onSelect }) {
 <div className="avatar">{worker.name.slice(0, 1)}</div>
 <div>
 <strong>{worker.name}</strong>
-<small>{reference?.external_reference || 'Loonnummer ontbreekt'} · {address?.address?.city || 'Adres ontbreekt'}</small>
+<small>{reference?.external_reference || 'Loonnummer ontbreekt'} · {addressLabel(address?.address)}</small>
 </div>
 <span>Bekijken →</span>
 </button> })}</div>
@@ -1217,7 +1276,7 @@ function App({ auth }) {
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('')
   const data = useMemo(() => deriveDashboard(state, matching), [state, matching])
 
-  async function load(messageAfter = '') { setError(''); const response = await fetch('/api/state'); if (!response.ok) throw new Error('Backend niet bereikbaar. Start eerst scripts/manage_transport.py.'); const next = await response.json(); setState(next); setMatching(next.matching); if (messageAfter) setMessage(messageAfter) }
+  async function load(messageAfter = '', preferredMonth = undefined) { setError(''); const response = await fetch('/api/state'); if (!response.ok) throw new Error('Backend niet bereikbaar. Start eerst scripts/manage_transport.py.'); const next = await response.json(); const remembered = preferredMonth === undefined ? (matching?.month || sessionStorage.getItem('hr-selected-month')) : preferredMonth; const preferredRun = remembered && next.matching_runs?.find(run => run.month === remembered); let selected = next.matching; if (preferredRun && preferredRun.id !== selected?.run_id) { const selectedResponse = await fetch(`/api/matching/run?id=${preferredRun.id}`); if (!selectedResponse.ok) throw new Error('Geselecteerde maand laden mislukt.'); selected = await selectedResponse.json() } setState({ ...next, matching: selected }); setMatching(selected); if (selected?.month) sessionStorage.setItem('hr-selected-month', selected.month); if (messageAfter) setMessage(messageAfter) }
   useEffect(() => { load().catch(reason => setError(reason.message)) }, [])
   useEffect(() => {
     if (page !== 'analytics' || !state) return
@@ -1230,10 +1289,10 @@ function App({ auth }) {
     return () => { active = false }
   }, [page, state?.revision])
   useEffect(() => { if (busy || (!message && !error)) return; const timer = setTimeout(() => { setMessage(''); setError('') }, error ? 9000 : 6500); return () => clearTimeout(timer) }, [busy, message, error])
-  async function save(action, payload) { setBusy(true); setError(''); setMessage('Wijziging opslaan en maand herberekenen…'); try { const response = await fetch(`/api/action/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: payload }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Opslaan mislukt.'); setMessage('Wijziging opgeslagen. Actuele gegevens laden…'); await load('Opgeslagen. De actuele maand is opnieuw gecontroleerd.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
+  async function save(action, payload) { const batchTransport = action === 'transport_default'; setBusy(true); setError(''); setMessage(batchTransport ? 'Vervoerswijze opslaan…' : 'Wijziging opslaan en maand herberekenen…'); try { const response = await fetch(`/api/action/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: payload }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Opslaan mislukt.'); setMessage('Wijziging opgeslagen. Actuele gegevens laden…'); await load(batchTransport ? 'Vervoer opgeslagen. Pas eventueel andere locaties aan en herbereken daarna één keer via Acties.' : 'Opgeslagen. De actuele maand is opnieuw gecontroleerd.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   async function refresh() { setBusy(true); setError(''); setMessage('Gegevens vernieuwen…'); try { await load('Gegevens zijn vernieuwd.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
-  async function chooseRun(runId) { setBusy(true); setError(''); setMessage('Geselecteerde maand laden…'); try { const response = await fetch(`/api/matching/run?id=${runId}`); if (!response.ok) throw new Error('Maand laden mislukt.'); const selected = await response.json(); setMatching(selected); setState(current => ({ ...current, matching: selected })); setMessage('Maand geladen.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
-  async function upload() { const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx'; input.onchange = async () => { const file = input.files?.[0]; if (!file) return; if (file.size > 5_000_000) return setError('Het bestand is groter dan 5 MB.'); setBusy(true); setError(''); setMessage('Export wordt verwerkt…'); try { const content = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('Bestand lezen mislukt.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file) }); const response = await fetch('/api/action/planet_upload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: { filename: file.name, content } }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Upload mislukt.'); await load('Pl@net-export verwerkt.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }; input.click() }
+  async function chooseRun(runId) { setBusy(true); setError(''); setMessage('Geselecteerde maand laden…'); try { const response = await fetch(`/api/matching/run?id=${runId}`); if (!response.ok) throw new Error('Maand laden mislukt.'); const selected = await response.json(); sessionStorage.setItem('hr-selected-month', selected.month); setMatching(selected); setState(current => ({ ...current, matching: selected })); setMessage('Maand geladen.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
+  async function upload() { const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx'; input.onchange = async () => { const file = input.files?.[0]; if (!file) return; if (file.size > 5_000_000) return setError('Het bestand is groter dan 5 MB.'); setBusy(true); setError(''); setMessage('Export wordt verwerkt…'); try { const content = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('Bestand lezen mislukt.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file) }); const response = await fetch('/api/action/planet_upload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: { filename: file.name, content } }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Upload mislukt.'); await load('Pl@net-export verwerkt.', null) } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }; input.click() }
   async function exportPayroll() { setBusy(true); setError(''); setMessage('Accerta-export wordt gemaakt…'); try { const response = await fetch('/api/payroll/export', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ run_id: matching.run_id }) }); if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Export mislukt.') } const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `VERVOER-AFWIJKENDE-LONEN-${matching.month}.xlsx`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setMessage('Accerta-export gedownload.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   async function exportRouteControl() { setBusy(true); setError(''); setMessage('Routecontrolebestand wordt gemaakt…'); try { const response = await fetch(`/api/routing/export?run_id=${matching.run_id}&csrf=${encodeURIComponent(state.csrf)}`); if (!response.ok) { const result = await response.json().catch(() => ({})); throw new Error(result.error || 'Routecontrole exporteren mislukt.') } const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `WERKNEMERSAFSTANDEN-CONTROLE-${matching.month}.xlsx`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setMessage('Routecontrolebestand gedownload.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   function resolveAction() { setPage('actions'); window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -1261,7 +1320,7 @@ function App({ auth }) {
 <MonthPicker state={state} matching={matching} onChange={chooseRun} />
 <button className="text-button" disabled={busy} onClick={upload}>＋ Nieuwe export</button>
 <button className="text-button" disabled={busy} onClick={refresh}>{busy && message.startsWith('Gegevens') ? 'Bezig…' : '↻ Vernieuwen'}</button>
-</div>{page === 'overview' && <Overview data={data} onUpload={upload} onExport={exportPayroll} onResolve={resolveAction} busy={busy} />}{page === 'actions' && <ActionCenter state={state} matching={matching} data={data} save={save} onEmployee={showEmployee} />}{page === 'review' && <MonthReview matching={matching} save={save} />}{page === 'analytics' && <Analytics analytics={analytics} month={matching?.month} loading={analyticsLoading} error={analyticsError} />}{page === 'employees' && <Employees state={state} onSelect={setWorkerId} />}{page === 'locations' && <Locations state={state} onSelect={setLocationKey} />}{page === 'technical' && <TechnicalManagement state={state} save={save} onRouteExport={exportRouteControl} busy={busy} />}{page === 'settings' && <Settings state={state} save={save} />}</main>{workerId && <WorkerDialog workerId={workerId} state={state} onClose={() => setWorkerId(null)} save={save} />}{locationKey && <LocationDialog locationKey={locationKey} state={state} onClose={() => setLocationKey(null)} save={save} />}{busy && <div className="activity-shield" role="status" aria-live="assertive"><div className="activity-toast busy"><div className="loader small" /><div><strong>{message || 'Even geduld…'}</strong><span>Sluit dit venster niet tijdens de verwerking.</span></div></div></div>}{!busy && error && <div className="activity-toast error" role="alert"><b>!</b><div><strong>Actie mislukt</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Melding sluiten">×</button></div>}{!busy && message && <div className="activity-toast success" role="status"><b>✓</b><div><strong>Gelukt</strong><span>{message}</span></div><button onClick={() => setMessage('')} aria-label="Melding sluiten">×</button></div>}</div>
+</div>{page === 'overview' && <Overview data={data} onUpload={upload} onExport={exportPayroll} onResolve={resolveAction} busy={busy} />}{page === 'actions' && <ActionCenter state={state} matching={matching} data={data} save={save} onEmployee={showEmployee} onReview={() => setPage('review')} />}{page === 'review' && <MonthReview matching={matching} state={state} save={save} />}{page === 'analytics' && <Analytics analytics={analytics} month={matching?.month} loading={analyticsLoading} error={analyticsError} />}{page === 'employees' && <Employees state={state} onSelect={setWorkerId} />}{page === 'locations' && <Locations state={state} onSelect={setLocationKey} />}{page === 'technical' && <TechnicalManagement state={state} save={save} onRouteExport={exportRouteControl} busy={busy} />}{page === 'settings' && <Settings state={state} save={save} />}</main>{workerId && <WorkerDialog workerId={workerId} state={state} onClose={() => setWorkerId(null)} save={save} />}{locationKey && <LocationDialog locationKey={locationKey} state={state} onClose={() => setLocationKey(null)} save={save} />}{busy && <div className="activity-shield" role="status" aria-live="assertive"><div className="activity-toast busy"><div className="loader small" /><div><strong>{message || 'Even geduld…'}</strong><span>Sluit dit venster niet tijdens de verwerking.</span></div></div></div>}{!busy && error && <div className="activity-toast error" role="alert"><b>!</b><div><strong>Actie mislukt</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Melding sluiten">×</button></div>}{!busy && message && <div className="activity-toast success" role="status"><b>✓</b><div><strong>Gelukt</strong><span>{message}</span></div><button onClick={() => setMessage('')} aria-label="Melding sluiten">×</button></div>}</div>
 }
 
 function AuthGate() {

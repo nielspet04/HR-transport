@@ -3,6 +3,7 @@ import json
 import pytest
 from app.itinerary import itineraries
 from app import routing,geocoding
+from app.configuration.routes import RouteStore
 from test_cached_calculation import setup_case,calculate
 
 
@@ -52,6 +53,78 @@ def test_only_gap_up_to_two_hours_is_direct_transfer(tmp_path,monkeypatch,start,
     leg=itineraries(p)[(p['movements'][1]['planet_id'],p['movements'][1]['day'],2)]
     assert leg['origin_location']==expected_origin and leg['gap_minutes']==gap
     assert leg['journey_kind']==('TRANSFER' if expected_origin else 'HOME')
+
+
+def test_consecutive_shifts_corrected_to_same_location_use_one_commute(tmp_path,monkeypatch):
+    store,run,p,wid=multi_case(tmp_path,monkeypatch)
+    p['movements'][1].update(location='LUCHTHAVEN',source_location='Wrong source')
+    with store.transaction() as db:
+        db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(p),run))
+    leg=itineraries(p)[(p['movements'][1]['planet_id'],p['movements'][1]['day'],2)]
+    assert leg['same_location_continuation'] is True
+    assert leg['journey_kind']=='SAME_LOCATION' and leg['origin_location'] is None
+    rows=store.get_matching(run)['calculation']['rows']
+    assert rows[0]['status']=='CALCULATED'
+    assert rows[1]['status']=='EXCLUDED_SAME_LOCATION' and rows[1]['amount'] is None
+    assert store.get_matching(run)['calculation']['monthly']['excluded']==1
+    prepared=store.get_route_plan(run)
+    assert all(route['origin_hash']!=route['destination_hash'] for route in prepared['routes'])
+
+
+def test_hr_can_force_direct_transfer_for_gap_over_two_hours(tmp_path,monkeypatch):
+    store,run,p,wid=multi_case(tmp_path,monkeypatch)
+    p['movements'][1]['source_shifts'][0].update(start='18:00',end='23:00')
+    with store.transaction() as db:
+        db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(p),run))
+    regular=itineraries(p)[(p['movements'][1]['planet_id'],p['movements'][1]['day'],2)]
+    assert regular['origin_location'] is None and regular['gap_minutes']==360
+    store.apply('itinerary_transfer_override',{'run_id':run,'movement_id':2,
+        'direct_transfer':True,'reason':'Agent bleef ter plaatse'},store.snapshot()['revision'])
+    shift=next(item for item in store.get_matching(run)['calculation']['monthly']['employees'][0]['shifts']
+        if item['movement_id']==2)
+    assert shift['origin_location']=='LUCHTHAVEN'
+    assert shift['direct_transfer_override'] is True and shift['gap_minutes']==360
+    store.apply('itinerary_transfer_override',{'run_id':run,'movement_id':2,
+        'direct_transfer':False,'reason':'Thuisrit herstellen'},store.snapshot()['revision'])
+    restored=next(item for item in store.get_matching(run)['calculation']['monthly']['employees'][0]['shifts']
+        if item['movement_id']==2)
+    assert restored['origin_location'] is None and restored['direct_transfer_override'] is False
+
+
+def test_employee_default_applies_to_all_days_and_can_be_disabled(tmp_path,monkeypatch):
+    store,run,p,wid=multi_case(tmp_path,monkeypatch)
+    p['movements'][1]['source_shifts'][0].update(start='18:00',end='23:00')
+    extra=deepcopy(p['movements'][1]);extra.update(id=3,day='2026-08-02')
+    first=deepcopy(p['movements'][0]);first.update(id=4,day='2026-08-02')
+    p['movements'].extend((first,extra))
+    with store.transaction() as db:
+        db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(p),run))
+    store.apply('itinerary_employee_default',{'run_id':run,'movement_id':2,
+        'direct_transfer':True,'reason':'Altijd rechtstreeks'},store.snapshot()['revision'])
+    shifts=store.get_matching(run)['calculation']['monthly']['employees'][0]['shifts']
+    seconds=[item for item in shifts if item['movement_id'] in (2,3)]
+    assert all(item['origin_location']=='LUCHTHAVEN' for item in seconds)
+    assert all(item['direct_transfer_scope']=='EMPLOYEE' for item in seconds)
+    assert all(item['direct_transfer_employee_default'] is True for item in seconds)
+    store.apply('itinerary_transfer_override',{'run_id':run,'movement_id':2,
+        'direct_transfer':False,'reason':'Alleen deze dag naar huis'},store.snapshot()['revision'])
+    exception=store.get_matching(run)['calculation']['monthly']['employees'][0]['shifts']
+    assert next(item for item in exception if item['movement_id']==2)['origin_location'] is None
+    assert next(item for item in exception if item['movement_id']==2)['direct_transfer_employee_default'] is True
+    assert next(item for item in exception if item['movement_id']==3)['origin_location']=='LUCHTHAVEN'
+    store.apply('itinerary_employee_default',{'run_id':run,'movement_id':2,
+        'direct_transfer':False,'reason':'Standaard verwijderen'},store.snapshot()['revision'])
+    restored=store.get_matching(run)['calculation']['monthly']['employees'][0]['shifts']
+    assert all(item['origin_location'] is None for item in restored if item['movement_id'] in (2,3))
+
+
+def test_yasin_confirmed_default_is_seeded_once_on_existing_database(tmp_path):
+    path=tmp_path/'routes.sqlite3';store=RouteStore(path)
+    with store.transaction() as db:store.worker(db,'Kurt Yasin')
+    RouteStore(path);RouteStore(path)
+    with store.connect() as db:
+        rows=db.execute('SELECT * FROM itinerary_employee_defaults').fetchall()
+        assert len(rows)==1 and rows[0]['direct_transfer']==1
 
 
 @pytest.mark.parametrize('start,end',[('11:00','17:00'),('08:00','09:00'),('13:00','13:00')])

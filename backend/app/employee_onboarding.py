@@ -100,12 +100,11 @@ def onboard(store, data, revision):
             external_reference = data.get('external_reference')
             append_reference(db, worker_id, start, external_reference, reason)
 
+        month_start = f"{payload['month']}-01"
         grouped = {}
         for movement in movements:
             assignment = assignments[norm(movement['source_location'])]
-            earliest = min(item['day'] for item in movements
-                if norm(assignments[norm(item['source_location'])]['location']) == norm(assignment['location']))
-            grouped[norm(assignment['location'])] = (assignment['location'], assignment['mode'], earliest)
+            grouped[norm(assignment['location'])] = (assignment['location'], assignment['mode'], month_start)
             if movement.get('location_status') != 'MATCHED':
                 for shift in movement.get('source_shifts', []):
                     customer = key(shift['customer'])

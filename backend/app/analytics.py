@@ -111,5 +111,8 @@ def build(store):
             WHERE month NOT IN (SELECT month FROM excluded_months)
               AND id IN (SELECT max(id) FROM matching_runs GROUP BY month)
             ORDER BY month''').fetchall()
-        payloads = [store.matching_payload(row, config, db) for row in rows]
+        # Historical trend rows remain readable after a later month's
+        # configuration changes. This is analytics-only: payroll and month
+        # review keep their strict stale guard.
+        payloads = [store.matching_payload(row, config, db, allow_stale_calculation=True) for row in rows]
     return summarize(payloads)

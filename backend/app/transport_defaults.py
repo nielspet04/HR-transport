@@ -26,4 +26,17 @@ def save(store,data,revision):
         if type(wid) is not int or not db.execute('SELECT 1 FROM workers WHERE id=?',(wid,)).fetchone():raise ValueError('Onbekende werknemer.')
         now=datetime.now(timezone.utc).isoformat()
         db.execute('INSERT INTO transport_defaults(worker_id,location,location_key,mode,valid_from,reason,changed_at) VALUES(?,?,?,?,?,?,?)',(wid,location,norm(location),mode,start,reason,now))
+        route=db.execute('''SELECT id FROM routes WHERE worker_id=? AND location_key=? AND mode_key=?''',
+            (wid,norm(location),norm(mode))).fetchone()
+        if not route:
+            route_id=db.execute('''INSERT INTO routes(worker_id,location,location_key,mode,mode_key)
+                VALUES(?,?,?,?,?)''',(wid,location,norm(location),mode,norm(mode))).lastrowid
+            store.version(db,route_id,start,None,reason,allow_missing=True)
+        elif not db.execute('SELECT 1 FROM versions WHERE route_id=? AND valid_from<=?',
+                (route['id'],start)).fetchone():
+            # The transport choice and its route must become effective together.
+            # Add a historical availability marker without changing the later
+            # distance version; cached Mapbox/HR distance remains authoritative.
+            store.version(db,route['id'],start,None,reason,
+                allow_missing=True,allow_historical=True)
         db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',(now,reason,json.dumps({'action':'transport_default','worker_id':wid,'location':location,'mode':mode,'valid_from':start})))

@@ -19,7 +19,7 @@ def key(value):
 
 def configuration_digest(config):
     values={k:config.get(k,[]) for k in ('workers','routes','versions','employee_links','location_links','car_tariffs','transport_defaults')}
-    values['calculation_policy']='phase6-start-only-separate-48h-default-car-coverage-v5'
+    values['calculation_policy']='phase6-start-only-separate-48h-default-car-coverage-v6-mapbox-default-backfill'
     return sha256(json.dumps(values,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
@@ -28,7 +28,7 @@ def suggestions(names,workers):
     return [{'worker_id':w['id'],'name':w['name']} for score,w in ranked[:3] if score>=.65]
 
 
-def match_import(imported,config,location_config):
+def match_import(imported,config,location_config,ignored_employee_ids=()):
     if imported.has_errors:raise ValueError('Los de Pl@net-importfouten eerst op.')
     if not imported.report.selected_month:raise ValueError('Kies expliciet één maand voor fase 4.')
     version,rules=load_location_rules(location_config)
@@ -43,7 +43,13 @@ def match_import(imported,config,location_config):
         if existing:
             if any(key(r.location)!=key(target) for r in existing):raise ValueError('Koppeling conflicteert met bestaande fysieke locatieregels.')
         else:aliases[shift.customer.strip().casefold()]=target
-    policy=CleaningPolicy(location_aliases=tuple(aliases.items()),location_rules=rules,location_config_version=version)
+    ignored_ids={value.strip() for value in ignored_employee_ids
+        if isinstance(value,str) and value.strip()}
+    base_policy=CleaningPolicy()
+    policy=CleaningPolicy(
+        ghost_employee_ids=tuple(set(base_policy.ghost_employee_ids)|ignored_ids),
+        location_aliases=tuple(aliases.items()),location_rules=rules,
+        location_config_version=version)
     cleaned=clean_import(imported,policy=policy)
     workers=config['workers'];workers_by_id={w['id']:w for w in workers}
     by_name=defaultdict(set)
@@ -126,10 +132,13 @@ def match_import(imported,config,location_config):
     excluded_rows={r.shift.source_row for r in cleaned.removals if r.reason in ('GHOST_AGENT','TELEWORK','CONFIRMED_EXCLUDED_REMARK')}
     # Duplicate source shifts remain evidence inside each physical movement.
     source_manifest=[{'row':s.source_row,'planet_id':s.employee_id} for s in imported.shifts if s.source_row not in excluded_rows]
+    ignored_rows=sum(s.employee_id in ignored_ids for s in imported.shifts)
     return {'month':imported.report.selected_month,'created_at':datetime.now(timezone.utc).isoformat(),'source_sha256':imported.report.source_sha256,
         'source_manifest':source_manifest,
         'calculation':calculate_month(movements,config.get('car_tariffs',[])),
         'configuration_digest':configuration_digest(config),'agents':list(agents.values()),'locations':sorted(locations.values(),key=lambda r:r['customer']),
         'movements':movements,'summary':{'agents':len(agents),'movements':len(movements),'source_shifts':sum(len(m.source_shifts) for m in cleaned.movements),
-            'statuses':dict(Counter(m['status'] for m in movements)),'input_rows':report.input_rows,'ghosts':report.ghost_agent_rows,
+            'statuses':dict(Counter(m['status'] for m in movements)),'input_rows':report.input_rows,
+            'ghosts':report.ghost_agent_rows-ignored_rows,'ignored_agents':len(ignored_ids),
+            'ignored_shifts':ignored_rows,
             'telework':report.telework_rows,'duplicates':report.duplicate_rows},'location_rules_version':version}

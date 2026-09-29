@@ -2,7 +2,7 @@
 from collections import Counter
 from decimal import Decimal
 
-EXCLUDED={'EXCLUDED_TRAIN','EXCLUDED_COMPANY_CAR','EXCLUDED_MOBILITY_BUDGET','EXCLUDED_TELEWORK'}
+EXCLUDED={'EXCLUDED_TRAIN','EXCLUDED_COMPANY_CAR','EXCLUDED_MOBILITY_BUDGET','EXCLUDED_TELEWORK','EXCLUDED_SAME_LOCATION'}
 
 
 def aggregate(payload,rows):
@@ -19,6 +19,9 @@ def aggregate(payload,rows):
         if row['status']=='CALCULATED' and row.get('amount') is not None:group['total']+=Decimal(row['amount'])
         group['shifts'].append({'movement_id':movement['id'],'date':movement['day'],
             'location':movement.get('location') or movement.get('source_location'),'status':row['status'],
+            'original_location':movement.get('original_location'),
+            'location_corrected':movement.get('location_corrected',False),
+            'location_correction_reason':movement.get('location_correction_reason'),
             'mode':row.get('selected_mode'),'distance':row.get('distance'),'rule':row.get('rule'),
             'amount':row.get('amount'),'amount_source':row.get('amount_source'),'reason':row.get('reason'),
             'original_amount':row.get('original_amount'),'amount_override_reason':row.get('amount_override_reason'),
@@ -29,6 +32,12 @@ def aggregate(payload,rows):
             'rate_per_km':row.get('rate_per_km'),'override_reason':row.get('override_reason'),
             'extra_shift_48h':movement.get('extra_shift_48h') is True,
             'early_late':movement.get('early_late') is True,
+            'multi_location':row.get('multi_location',False),'origin_location':row.get('origin_location'),
+            'sequence':row.get('sequence'),'gap_minutes':row.get('gap_minutes'),
+            'journey_kind':row.get('journey_kind'),
+            'direct_transfer_override':row.get('direct_transfer_override',False),
+            'direct_transfer_scope':row.get('direct_transfer_scope'),
+            'direct_transfer_employee_default':row.get('direct_transfer_employee_default',False),
             'source_shifts':movement.get('source_shifts',[])})
     employees=[]
     for group in groups.values():

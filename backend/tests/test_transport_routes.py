@@ -64,6 +64,18 @@ def test_same_date_correction_is_audited_and_keeps_earlier_versions(tmp_path):
         assert json.loads(change['previous'])['kms']=='20' and change['reason']=='Meetfout'
 
 
+def test_earlier_manual_distance_date_adds_history_without_overwriting_latest(tmp_path):
+    store=RouteStore(tmp_path/'routes.sqlite3')
+    apply(store,'route_add',name='A',location='Atlas Edge',mode='Privé auto',kms='17',
+        valid_from='2026-09-17',reason='Eerste invoer')
+    apply(store,'route_update',route_id=1,kms='17',valid_from='2026-09-01',
+        reason='Afstand geldt vanaf maandbegin')
+    assert store.resolve(1,'2026-09-14')['kms']=='17'
+    assert store.resolve(1,'2026-09-18')['kms']=='17'
+    versions=store.snapshot()['versions']
+    assert {item['valid_from'] for item in versions}=={'2026-09-01','2026-09-17'}
+
+
 def test_relocation_all_routes_atomic_and_stale_screen_rejected(tmp_path):
     store=RouteStore(tmp_path/'routes.sqlite3');store.import_source(source(tmp_path,[['A','APT',12,'Fiets'],['A','APT',15,'Privé auto']]),'2026-02-01')
     before=store.snapshot()

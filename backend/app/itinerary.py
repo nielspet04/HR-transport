@@ -6,8 +6,9 @@ from app.importers.reference import norm
 MAX_DIRECT_TRANSFER_GAP=timedelta(hours=2)
 
 
-def itineraries(payload, excluded_movement_ids=()):
+def itineraries(payload, excluded_movement_ids=(), direct_transfer_movement_ids=()):
     excluded_movement_ids=set(excluded_movement_ids)
+    direct_transfer_movement_ids=set(direct_transfer_movement_ids)
     agents={a['planet_id']:a for a in payload['agents']};groups=defaultdict(list);result={}
     for m in payload['movements']:
         if m.get('id') in excluded_movement_ids:continue
@@ -34,9 +35,14 @@ def itineraries(payload, excluded_movement_ids=()):
         for index,(start,_,m) in enumerate(ordered if not error else [(None,None,m) for m in group]):
             previous_entry=ordered[index-1] if not error and index else None
             gap=start-previous_entry[1] if previous_entry else None
-            previous=previous_entry[2] if previous_entry and gap<=MAX_DIRECT_TRANSFER_GAP else None
+            same_location=bool(previous_entry and gap<=MAX_DIRECT_TRANSFER_GAP
+                and norm(previous_entry[2].get('location'))==norm(m.get('location')))
+            forced=bool(previous_entry and not same_location and m.get('id') in direct_transfer_movement_ids and gap>MAX_DIRECT_TRANSFER_GAP)
+            previous=previous_entry[2] if previous_entry and not same_location and (gap<=MAX_DIRECT_TRANSFER_GAP or forced) else None
             result[(m['planet_id'],m['day'],m['id'])]={'multi_location':True,'error':error,
                 'origin_location':previous.get('location') if previous else None,'sequence':index+1,
                 'gap_minutes':int(gap.total_seconds()/60) if gap is not None else None,
-                'journey_kind':'TRANSFER' if previous else 'HOME'}
+                'journey_kind':'SAME_LOCATION' if same_location else 'TRANSFER' if previous else 'HOME',
+                'same_location_continuation':same_location,
+                'direct_transfer_override':forced}
     return result

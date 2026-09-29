@@ -39,6 +39,65 @@ def test_auto_default_cached_not_manual_train_or_bike(tmp_path,monkeypatch):
     assert store.get_matching(run)['calculation']['rows'][0]['amount']=='7.38'
 
 
+def test_one_shift_changed_from_car_to_bicycle_requests_separate_cycling_route(tmp_path,monkeypatch):
+    store,run,p,wid=setup_case(tmp_path,monkeypatch)
+    driving=next(item for item in store.snapshot()['route_distances'] if item['profile']=='driving')
+    store.apply('shift_transport_choice',{'run_id':run,'movement_id':1,
+        'mode':'BIKE','reason':'Deze shift uitzonderlijk met de fiets'},store.snapshot()['revision'])
+    cycling=next(item for item in store.get_route_plan(run)['routes'] if item['profile']=='cycling')
+    assert cycling['cache_key']!=driving['cache_key'] and cycling['cached'] is None
+    blocked=store.get_matching(run)['calculation']['rows'][0]
+    assert blocked['status']=='BLOCKED' and blocked['amount'] is None
+    assert blocked['reason']=='Geen bevestigde opgeslagen fietsroute op deze datum.'
+    calls=[]
+    monkeypatch.setattr(routing,'request_distance',lambda profile,*args:
+        (calls.append(profile) or {'meters':'8100','kms':'8.1','alternatives_count':1}))
+    store.apply('route_distance_request',{'run_id':run,'cache_key':cycling['cache_key'],'consent':True},store.snapshot()['revision'])
+    calculated=store.get_matching(run)['calculation']['rows'][0]
+    assert calls==['cycling']
+    assert calculated['status']=='CALCULATED' and calculated['selected_mode']=='Fiets'
+    assert calculated['distance']=='9' and calculated['distance_source']=='Mapbox'
+    assert calculated['mapbox_route_id']!=driving['id']
+
+
+def test_one_wrong_planet_shift_location_can_be_corrected_and_restored(tmp_path,monkeypatch):
+    store,run,p,wid=setup_case(tmp_path,monkeypatch)
+    airport_route=next(item for item in store.snapshot()['route_distances'] if item['profile']=='driving')
+    other_address={'street':'Andere site','number':'2','unit':'','postal_code':'1000','city':'Brussel','country':'BE'}
+    with store.transaction() as db:
+        db.execute('INSERT INTO location_address_versions(location_key,location,valid_from,address,changed_at,reason) VALUES(?,?,?,?,?,?)',
+            ('other','Other','2026-01-01',json.dumps(other_address),'test','Test'))
+        from app import geocoding
+        db.execute('INSERT INTO address_geocodes(address_hash,provider,status,result,requested_at) VALUES(?,?,?,?,?)',
+            (geocoding.fingerprint(other_address),'mapbox-v6-permanent','REVIEW',json.dumps({'longitude':4.5,'latitude':50.9}),'test'))
+        route_id=db.execute('INSERT INTO routes(worker_id,location,location_key,mode,mode_key) VALUES(?,?,?,?,?)',
+            (wid,'Other','other','Privé auto','privé auto')).lastrowid
+        store.version(db,route_id,'2026-01-01',None,'Test',allow_missing=True)
+        db.execute('INSERT INTO transport_defaults(worker_id,location,location_key,mode,valid_from,reason,changed_at) VALUES(?,?,?,?,?,?,?)',
+            (wid,'Other','other','Privé auto','2026-01-01','Test','test'))
+        p['configuration_digest']=configuration_digest(store.matching_config(db))
+        db.execute('UPDATE matching_runs SET payload=? WHERE id=?',(json.dumps(p),run))
+    store.apply('shift_location_choice',{'run_id':run,'movement_id':1,
+        'location':'Other','reason':'Foutieve Pl@net-locatie'},store.snapshot()['revision'])
+    corrected=store.get_matching(run)
+    movement=corrected['movements'][0];row=corrected['calculation']['rows'][0]
+    assert movement['location']=='Other' and movement['original_location']=='LUCHTHAVEN'
+    assert movement['location_corrected'] is True and row['status']=='BLOCKED'
+    other_route=next(item for item in store.get_route_plan(run)['routes'] if item['profile']=='driving')
+    assert other_route['cache_key']!=airport_route['cache_key'] and other_route['cached'] is None
+    monkeypatch.setattr(routing,'request_distance',lambda *args:
+        {'meters':'12300','kms':'12.3','alternatives_count':1})
+    store.apply('route_distance_request',{'run_id':run,'cache_key':other_route['cache_key'],'consent':True},store.snapshot()['revision'])
+    recalculated=store.get_matching(run)
+    assert recalculated['calculation']['rows'][0]['distance']=='13'
+    assert recalculated['calculation']['monthly']['employees'][0]['shifts'][0]['location']=='Other'
+    store.apply('shift_location_choice',{'run_id':run,'movement_id':1,'reset':True,
+        'reason':'Oorspronkelijke locatie herstellen'},store.snapshot()['revision'])
+    restored=store.get_matching(run)
+    assert restored['movements'][0]['location']=='LUCHTHAVEN'
+    assert restored['calculation']['rows'][0]['mapbox_route_id']==airport_route['id']
+
+
 def test_payroll_ready_requires_month_and_external_reference(tmp_path,monkeypatch):
     from app.configuration.external_references import append_reference
     store,run,p,wid=setup_case(tmp_path,monkeypatch)

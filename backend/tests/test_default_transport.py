@@ -12,13 +12,15 @@ def test_default_car_once_earliest_day_preserves_explicit_transport(tmp_path):
                  'movements':[movement,{**movement,'day':'2026-02-01'},
                               {**movement,'location':'Treinsite'},
                               {**movement,'location':'Onbekend','location_status':'UNMATCHED_LOCATION'}]}
-        assert seed(store,db,[payload])==1
+        assert seed(store,db,[payload])==2
         assert seed(store,db,[payload])==0
         r=db.execute("SELECT * FROM routes WHERE location='Nieuwe site'").fetchone()
         assert r['mode']=='Privé auto'
         v=db.execute('SELECT * FROM versions WHERE route_id=?',(r['id'],)).fetchone()
         assert v['valid_from']=='2026-02-01' and v['kms'] is None
         assert db.execute("SELECT count(*) FROM routes WHERE location='Treinsite'").fetchone()[0]==1
+        train_default=db.execute("SELECT * FROM transport_defaults WHERE location='Treinsite'").fetchone()
+        assert train_default['mode']=='Trein' and train_default['valid_from']=='2026-08-01'
         assert not db.execute("SELECT 1 FROM routes WHERE location='Onbekend'").fetchone()
 
 
@@ -28,6 +30,21 @@ def test_unmatched_worker_never_gets_default(tmp_path):
         payload={'agents':[{'planet_id':'1','worker_id':None,'status':'UNMATCHED_EMPLOYEE'}],
                  'movements':[{'planet_id':'1','location':'Site','day':'2026-08-14','location_status':'MATCHED'}]}
         assert seed(store,db,[payload])==0
+
+
+def test_single_legacy_route_gets_month_start_default_for_mapbox(tmp_path):
+    store=RouteStore(tmp_path/'routes.sqlite3')
+    with store.transaction() as db:
+        wid=store.worker(db,'Legacy Agent')
+        rid=db.execute("""INSERT INTO routes(worker_id,location,location_key,mode,mode_key)
+            VALUES(?,'Atlas Edge','atlas edge','Privé auto','privé auto')""",(wid,)).lastrowid
+        store.version(db,rid,'2026-09-17','17','Oude invoer')
+        payload={'agents':[{'planet_id':'422','worker_id':wid,'status':'MATCHED'}],
+            'movements':[{'planet_id':'422','location':'Atlas Edge','day':'2026-09-14',
+                'location_status':'MATCHED'}]}
+        assert seed(store,db,[payload])==1
+        default=db.execute('SELECT * FROM transport_defaults WHERE worker_id=?',(wid,)).fetchone()
+        assert default['mode']=='Privé auto' and default['valid_from']=='2026-09-01'
 
 
 def test_source_refresh_seeds_before_publishing_all_months(tmp_path):
@@ -45,4 +62,4 @@ def test_source_refresh_seeds_before_publishing_all_months(tmp_path):
         assert payload['movements'][0]['status']=='MATCHED'
         assert payload['movements'][0]['routes'][0]['mode']=='Privé auto'
         assert payload['movements'][0]['routes'][0]['kms'] is None
-        assert payload['movements'][0]['routes'][0]['valid_from']=='2026-02-10'
+        assert payload['movements'][0]['routes'][0]['valid_from']=='2026-02-01'

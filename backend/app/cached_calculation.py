@@ -10,13 +10,17 @@ from app.distances import whole_kms
 from app.calculation import validate_km_rate
 
 
-def calculate_cached_month(db,config,run_id,payload):
+def calculate_cached_month(db,config,run_id,payload,allow_stale=False):
     movements=deepcopy(payload['movements'])
     agents={a['planet_id']:a for a in payload['agents']}
     from app.shift_transport import choices as transport_choices
     overrides=transport_choices(db,payload)
+    from app.itinerary_overrides import direct_choices
+    itinerary_choices=direct_choices(db,payload)
     from app.itinerary import itineraries
-    journeys=itineraries(payload,{movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'})
+    journeys=itineraries(payload,
+        {movement_id for movement_id,choice in overrides.items() if choice and choice['mode']=='TELEWORK'},
+        {movement_id for movement_id,choice in itinerary_choices.items() if choice['direct_transfer']})
     from app.calculation_corrections import corrections as amount_corrections
     amount_overrides=amount_corrections(db,payload)
     sites=defaultdict(set)
@@ -28,7 +32,7 @@ def calculate_cached_month(db,config,run_id,payload):
         sites[(wid or m['planet_id'],m['day'])].add(norm(m.get('location') or m['source_location']))
     lookup={};plan_error=None
     try:
-        prepared=plan(db,config,run_id)
+        prepared=plan(db,config,run_id,allow_stale=allow_stale)
         for route in prepared['routes']:
             for c in route['contexts']:
                 lookup[(c['worker_id'],norm(c['location']),c['day'],route['profile'])]=(route,c)
@@ -78,11 +82,18 @@ def calculate_cached_month(db,config,run_id,payload):
                     tariff=max(effective,key=lambda t:(t['valid_from'],t['id']));km=Decimal(whole_kms(selected['kms']));rate=Decimal(validate_km_rate(tariff['rate_per_km']));total=km*2
                     result.update(status='CALCULATED',amount=format((total*rate).quantize(Decimal('.01'),rounding=ROUND_HALF_UP),'.2f'),reason='Fiets: gewone fietsvergoeding heen en terug; geen vroeg/laat- of 48h-toeslag.',tariff_kind='BICYCLE',selected_mode='Fiets',distance=str(km),reimbursed_kms=str(total),distance_factor=2,distance_valid_from=max(context['home_valid_from'],context['location_valid_from']),tariff_id=tariff['id'],tariff_valid_from=tariff['valid_from'],tariff_source=tariff['source'],rate_per_km=str(rate),rule=f'{km} km × 2 × €{rate}/km',mapbox_route_id=selected['id'],distance_source=selected['distance_source'],override_reason=choice['reason'] if choice else None)
         result.update(multi_location=leg.get('multi_location',False),origin_location=leg.get('origin_location'),sequence=leg.get('sequence'),
-                      gap_minutes=leg.get('gap_minutes'),journey_kind=leg.get('journey_kind'))
+                      gap_minutes=leg.get('gap_minutes'),journey_kind=leg.get('journey_kind'),
+                      direct_transfer_override=leg.get('direct_transfer_override',False),
+                      direct_transfer_scope=(itinerary_choices.get(m['id']) or {}).get('scope') if leg.get('direct_transfer_override') else None,
+                      direct_transfer_employee_default=(itinerary_choices.get(m['id']) or {}).get('employee_default_active',False))
         result.update(selected_mode=result.get('selected_mode') or ('Auto' if cars else 'Trein' if chosen=='TRAIN' else 'Dienstwagen' if chosen=='COMPANY_CAR' else 'Mob budget' if chosen=='MOBILITY_BUDGET' else 'Telework' if chosen=='TELEWORK' else None),distance_source=result.get('distance_source') or (selected['distance_source'] if selected else None),
                       travel_kms=selected['kms'] if selected else None,
                       mapbox_route_id=result.get('mapbox_route_id') or (selected['id'] if selected else None),override_reason=result.get('override_reason') or (choice['reason'] if choice else selected.get('override_reason') if selected else None))
-        if plan_error:
+        if leg.get('same_location_continuation'):
+            result.update(status='EXCLUDED_SAME_LOCATION',amount=None,distance=None,reimbursed_kms=None,
+                distance_factor=None,distance_source=None,mapbox_route_id=None,tariff_kind=None,
+                reason='Aansluitende shift op dezelfde fysieke locatie: dezelfde woon-werkverplaatsing wordt niet dubbel vergoed.')
+        elif plan_error:
             result.update(status='BLOCKED',amount=None,reason=plan_error)
         elif leg.get('error') and chosen!='TELEWORK':
             result.update(status='LATER_PHASE',amount=None,reason=leg['error'])

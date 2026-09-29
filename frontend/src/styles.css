@@ -60,7 +60,14 @@ nav button span { display: grid; place-items: center; min-width: 22px; height: 2
 
 .content { grid-column: 2; width: min(1120px, 100%); margin: 0 auto; padding: 0 38px 70px; }
 .toolbar { min-height: 70px; display: flex; justify-content: flex-end; align-items: center; gap: 22px; }
-.toolbar .field { width: 190px; margin-right: auto; }
+.toolbar .field { width: 250px; margin-right: auto; }
+.month-picker { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 6px; }
+.month-picker select { width: 100%; }
+.month-step { border: 1px solid #ccd8d2; border-radius: 8px; background: #fff; color: #12385f; font-size: 21px; line-height: 1; cursor: pointer; }
+.month-step:hover:not(:disabled) { border-color: #12385f; background: #f2f7fa; }
+.month-step:disabled { color: #aab4af; background: #f3f5f4; cursor: default; }
+.shift-location { display: grid; gap: 2px; }
+.shift-location small { color: #7c8983; font-size: 10px; font-weight: 500; }
 .text-button, .link-button { border: 0; padding: 0; color: #176b4d; background: none; font-size: 13px; font-weight: 700; }
 .page-header, .simple-header { margin: 10px 0 26px; }
 .page-header { display: flex; justify-content: space-between; gap: 30px; align-items: flex-start; }
