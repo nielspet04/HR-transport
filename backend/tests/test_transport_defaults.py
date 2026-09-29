@@ -22,6 +22,12 @@ def test_effective_default_is_location_and_date_specific():
     assert effective(rows,3,'Site','2026-08-01')['mode']=='Mob budget'
 
 
+def test_latest_same_day_transport_change_wins():
+    rows=[{'id':1,'worker_id':2,'location_key':'atlas edge','valid_from':'2026-09-01','mode':'Privé auto'},
+          {'id':2,'worker_id':2,'location_key':'atlas edge','valid_from':'2026-09-01','mode':'Dienstwagen'}]
+    assert effective(rows,2,'Atlas Edge','2026-09-01')['mode']=='Dienstwagen'
+
+
 def test_transport_start_date_can_be_saved_at_export_month_start(tmp_path):
     store=RouteStore(tmp_path/'routes.sqlite3')
     store.apply('route_add',{'name':'Test Agent','location':'Site','mode':'Privé auto',

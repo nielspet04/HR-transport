@@ -802,6 +802,7 @@ function WorkerDialogBase({ workerId, state, onClose, save, children }) {
     return groups
   }, new Map()).values()]
   const selectedMonthStart = state.matching?.month ? `${state.matching.month}-01` : today()
+  const selectedMonthEnd = state.matching?.month ? `${state.matching.month}-31` : '9999-12-31'
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
 <section className="modal">
 <button className="close" onClick={onClose}>×</button>
@@ -822,15 +823,15 @@ function WorkerDialogBase({ workerId, state, onClose, save, children }) {
 </div>
 </div>
 <h3>Vervoer en afstanden</h3>
-<div className="route-list">{routeGroups.map(group => { const route = group[0]; const transport = latest(state.transport_defaults || [], item => item.worker_id === workerId && item.location_key === route.location_key); const routeModes = [...new Set(group.map(item => item.mode))]; const selectedMode = transport?.mode || (routeModes.length === 1 ? routeModes[0] : ''); return <details key={route.location_key}>
+<div className="route-list">{routeGroups.map(group => { const route = group[0]; const transport = latest(state.transport_defaults || [], item => item.worker_id === workerId && item.location_key === route.location_key && item.valid_from <= selectedMonthEnd); const routeModes = [...new Set(group.map(item => item.mode))]; const selectedMode = transport?.mode || (routeModes.length === 1 ? routeModes[0] : ''); return <details key={route.location_key}>
 <summary>
 <strong>{route.location}</strong>
-<span>{transport ? `Standaard: ${transport.mode}` : routeModes.length === 1 ? `Vervoer: ${routeModes[0]}` : 'Standaard nog niet gekozen'}</span>
+<span>{transport ? `Standaard: ${transport.mode} · vanaf ${transport.valid_from}` : routeModes.length === 1 ? `Vervoer: ${routeModes[0]}` : 'Standaard nog niet gekozen'}</span>
 <b>{routeModes.join(' / ')}</b>
 </summary>
 <form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('transport_default', { worker_id: workerId, location: route.location, mode: form.get('mode'), valid_from: form.get('valid_from'), reason: form.get('reason') }) }}>
 <Field label="Standaard vervoer">
-<select name="mode" defaultValue={selectedMode} required>
+<select key={`transport-${transport?.id || 'nieuw'}-${selectedMode}`} name="mode" defaultValue={selectedMode} required>
 {!selectedMode && <option value="" disabled>Kies standaard vervoer…</option>}{modes.map(mode => <option key={mode}>{mode}</option>)}</select>
 </Field>
 <Field label="Geldig vanaf">
