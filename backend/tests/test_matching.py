@@ -55,8 +55,8 @@ def test_missing_location_and_missing_employee_location_are_distinct():
 
 
 def test_event_ad_hoc_produces_one_dated_action_per_source_shift():
-    data=imported(shift(customer='Event ad hoc',start_time=time(18),end_time=time(22)),
-                  shift(3,customer='Event ad hoc',start_time=time(22),end_time=time(23,30)))
+    data=imported(shift(customer='EVENT AD.HOC',start_time=time(18),end_time=time(22)),
+                  shift(3,customer='Event-Ad-Hoc',start_time=time(22),end_time=time(23,30)))
     result=match_import(data,config(),RULES)
     assert len(result['movements'])==2
     assert all(movement['status']=='UNMATCHED_LOCATION' for movement in result['movements'])

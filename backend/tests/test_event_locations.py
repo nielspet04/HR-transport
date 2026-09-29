@@ -15,9 +15,9 @@ def prepared(tmp_path,monkeypatch):
         movements.append({'id':movement_id,'planet_id':'100','day':'2026-09-12',
             'source_location':'Event ad hoc','location':None,'employee_status':'MATCHED',
             'location_status':'UNMATCHED_LOCATION','status':'UNMATCHED_LOCATION','routes':[],
-            'source_shifts':[{'row':row,'customer':'Event ad hoc','task':'Event',
+            'source_shifts':[{'row':row,'customer':'EVENT AD.HOC','task':'Event',
                 'start':start,'end':end,'end_day_offset':None}]})
-        locations.append({'customer':'Event ad hoc','physical_location':'Event ad hoc',
+        locations.append({'customer':'EVENT AD.HOC','physical_location':'EVENT AD.HOC',
             'reference_location':None,'status':'UNMATCHED_LOCATION','movement_id':movement_id,
             'is_ad_hoc':True,'day':'2026-09-12','start':start,'end':end,
             'end_day_offset':None,'planet_id':'100','source_row':row})

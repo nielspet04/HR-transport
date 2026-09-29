@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import date
+import re
 
 from app.models.shift import ImportResult, Shift
 from .locations import LocationRule, validate_rules
@@ -13,7 +14,10 @@ def normalize_remark(value: str | None) -> str:
 
 
 def is_event_ad_hoc(customer: str | None) -> bool:
-    return (customer or "").strip().casefold() == "event ad hoc"
+    # Pl@net currently exports "EVENT AD.HOC"; accept harmless punctuation
+    # and whitespace variants without fuzzy-matching unrelated customers.
+    normalized = re.sub(r"[^a-z0-9]+", " ", (customer or "").strip().casefold()).strip()
+    return normalized == "event ad hoc"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +154,7 @@ def clean_import(imported: ImportResult, *,
         # reusable customer location. The source row keeps even same-day,
         # same-worker events separate until HR identifies the real venue.
         mapped = None if is_event_ad_hoc(shift.customer) else policy.location_for(shift.customer, shift.day)
-        location_key = (("event_ad_hoc", shift.customer, str(shift.source_row)) if is_event_ad_hoc(shift.customer)
+        location_key = (("event_ad_hoc", "Event ad hoc", str(shift.source_row)) if is_event_ad_hoc(shift.customer)
                         else ("mapped", mapped) if mapped is not None else ("customer", shift.customer))
         key = (shift.employee_id, shift.day, location_key)
         if key in groups:

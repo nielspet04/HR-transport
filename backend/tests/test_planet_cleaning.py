@@ -169,8 +169,8 @@ def test_airport_does_not_merge_other_workers_days_or_unknown_customers():
 
 
 def test_each_event_ad_hoc_source_shift_stays_a_separate_movement():
-    rows=(shift(customer='Event ad hoc',start_time=time(18),end_time=time(22)),
-          shift(3,customer=' EVENT AD HOC ',start_time=time(22),end_time=time(23,30)))
+    rows=(shift(customer='EVENT AD.HOC',start_time=time(18),end_time=time(22)),
+          shift(3,customer=' Event-Ad-Hoc ',start_time=time(22),end_time=time(23,30)))
     result=clean_import(imported(*rows))
     assert result.report.remaining_movements==2
     assert result.report.duplicate_rows==0
