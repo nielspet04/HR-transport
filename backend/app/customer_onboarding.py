@@ -82,6 +82,6 @@ def onboard(store, data, revision):
             (now,reason,json.dumps({'action':'customer_onboard','source_location':source_location,
                 'customers':[key(customer) for customer in customers],'location':target,
                 'new_location':choice=='NEW','route_ids':created_routes})))
-        results = store.process_matching_file(db,run['source_path'],payload['source_sha256'])
+        results = store.process_matching_file(db,store.matching_source(db,run,payload),payload['source_sha256'])
         return {'location':target,'customers':len(customers),'routes':len(created_routes),
             'months':len(results),'new_location':choice=='NEW'}

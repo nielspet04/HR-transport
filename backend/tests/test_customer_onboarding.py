@@ -24,6 +24,7 @@ def prepared(tmp_path,monkeypatch):
         run=db.execute('INSERT INTO matching_runs(month,created_at,source_path,payload) VALUES(?,?,?,?)',
             ('2026-08','2026-09-01T00:00:00+00:00','unused.xlsx',json.dumps(payload))).lastrowid
     monkeypatch.setattr(store,'process_matching_file',lambda db,source,expected_hash=None:[{'month':'2026-08'}])
+    monkeypatch.setattr(store,'matching_source',lambda db,run,payload=None:run['source_path'])
     return store,run,worker
 
 

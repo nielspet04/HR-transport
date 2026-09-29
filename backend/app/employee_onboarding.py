@@ -126,6 +126,6 @@ def onboard(store, data, revision):
             (now, reason, json.dumps({'action':'employee_onboard','planet_id':planet_id,
                 'worker_id':worker_id,'locations':[item[0] for item in grouped.values()],
                 'route_ids':created_routes})))
-        results = store.process_matching_file(db, run['source_path'], payload['source_sha256'])
+        results = store.process_matching_file(db, store.matching_source(db,run,payload), payload['source_sha256'])
         return {'worker_id':worker_id,'name':name,'external_reference':external_reference,
             'routes':len(created_routes),'months':len(results)}

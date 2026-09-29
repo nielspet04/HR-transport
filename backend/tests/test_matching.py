@@ -164,11 +164,11 @@ def test_dashboard_lists_only_latest_run_per_month_but_keeps_history(tmp_path):
     assert store.get_matching(run)['run_id']==run
 
 
-def test_missing_source_confirmation_rolls_back(tmp_path):
+def test_missing_source_is_restored_from_database_copy(tmp_path):
     store,source,run=prepared_store(tmp_path)
-    source.rename(tmp_path/'moved.xlsx');before=store.snapshot()
-    with pytest.raises(ValueError):store.apply('matching_employee',{'run_id':run,'planet_id':'006','worker_id':1,'reason':'HR'},before['revision'])
-    assert store.snapshot()==before
+    source.unlink();before=store.snapshot()
+    store.apply('matching_employee',{'run_id':run,'planet_id':'006','worker_id':1,'reason':'HR'},before['revision'])
+    assert store.snapshot()['matching']['agents'][0]['status']=='MATCHED'
 
 
 def test_refresh_processes_all_months_and_keeps_unmatched_agents(tmp_path):
@@ -184,9 +184,9 @@ def test_refresh_processes_all_months_and_keeps_unmatched_agents(tmp_path):
     assert july['agents'][0]['planet_id']=='007'
     assert july['agents'][0]['status']=='UNMATCHED_EMPLOYEE'
     assert july['summary']['movements']==1
-    before=store.snapshot();source.rename(tmp_path/'missing.xlsx')
-    with pytest.raises(ValueError):store.apply('matching_refresh',{'run_id':run},before['revision'])
-    assert store.snapshot()==before
+    before=store.snapshot();source.unlink()
+    store.apply('matching_refresh',{'run_id':latest['2026-08']},before['revision'])
+    assert {item['month'] for item in store.snapshot()['matching_runs']}=={'2026-07','2026-08'}
 
 
 def test_confirmation_updates_all_source_months(tmp_path):

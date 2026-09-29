@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import base64
 import binascii
+import hashlib
 import tempfile
 from zipfile import ZipFile,BadZipFile
 from pathlib import Path
@@ -30,6 +31,8 @@ CREATE TABLE IF NOT EXISTS matching_location_links(customer TEXT PRIMARY KEY,loc
 CREATE TABLE IF NOT EXISTS matching_runs(id INTEGER PRIMARY KEY,month TEXT NOT NULL,created_at TEXT NOT NULL,source_path TEXT NOT NULL,payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS matching_runs_month_latest ON matching_runs(month,id);
 CREATE INDEX IF NOT EXISTS matching_runs_source_month_latest ON matching_runs(source_path,month,id);
+CREATE TABLE IF NOT EXISTS matching_sources(
+ source_sha256 TEXT PRIMARY KEY,filename TEXT NOT NULL,content BLOB NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS excluded_months(month TEXT PRIMARY KEY,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS matching_audit(id INTEGER PRIMARY KEY,changed_at TEXT NOT NULL,reason TEXT NOT NULL,details TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS car_tariffs(id INTEGER PRIMARY KEY,valid_from TEXT NOT NULL,data TEXT NOT NULL,source TEXT NOT NULL,reason TEXT NOT NULL,changed_at TEXT NOT NULL);
@@ -90,6 +93,19 @@ class RouteStore(Store):
                 db.execute('INSERT INTO car_tariffs(valid_from,data,source,reason,changed_at) VALUES(?,?,?,?,?)',
                     ('2026-02-01',json.dumps(pdf_start_tariff()),'accg-pc-317-vervoerskosten_9.pdf · gewone auto · 120%-kolom',
                      'Starttabel bevestigd door gebruiker',datetime.now(timezone.utc).isoformat()))
+            # Migrate still-readable sources from older installations before a
+            # later deployment can invalidate their absolute filesystem paths.
+            for row in db.execute('''SELECT source_path,json_extract(payload,'$.source_sha256') source_sha256
+                FROM matching_runs GROUP BY source_path,source_sha256'''):
+                source=Path(row['source_path']);source_hash=row['source_sha256']
+                if not source_hash or not source.is_file() or db.execute(
+                    'SELECT 1 FROM matching_sources WHERE source_sha256=?',(source_hash,)).fetchone():continue
+                try:content=source.read_bytes()
+                except OSError:continue
+                if hashlib.sha256(content).hexdigest()==source_hash:
+                    db.execute('''INSERT INTO matching_sources
+                        (source_sha256,filename,content,created_at) VALUES(?,?,?,?)''',
+                        (source_hash,source.name,content,datetime.now(timezone.utc).isoformat()))
         self.path.chmod(0o600)
 
     @staticmethod
@@ -410,7 +426,14 @@ class RouteStore(Store):
             (payload['month'],payload['created_at'],str(Path(source).resolve()),json.dumps(payload,ensure_ascii=False))).lastrowid
 
     def save_matching(self,payload,source,revision):
-        with self.transaction(revision) as db:return self.insert_matching(db,payload,source)
+        with self.transaction(revision) as db:
+            run_id=self.insert_matching(db,payload,source)
+            path=Path(source)
+            if path.is_file():
+                db.execute('''INSERT OR IGNORE INTO matching_sources
+                    (source_sha256,filename,content,created_at) VALUES(?,?,?,?)''',
+                    (payload['source_sha256'],path.name,path.read_bytes(),datetime.now(timezone.utc).isoformat()))
+            return run_id
 
     def process_source(self,source,revision):
         """Publish all source months together, or none on any failure."""
@@ -445,11 +468,19 @@ class RouteStore(Store):
         from app.importers.planet import import_planet
         from app.matching import match_import
         try:imported=import_planet(source)
-        except Exception:raise ValueError('Bronbestand niet leesbaar. Herstel het bronbestand en probeer opnieuw.') from None
+        except Exception:raise ValueError('Bronbestand niet leesbaar. Upload het oorspronkelijke Pl@net-bestand opnieuw en probeer opnieuw.') from None
         if expected_hash and imported.report.source_sha256!=expected_hash:
             raise ValueError('Bronbestand gewijzigd. Importeer het volledige bestand opnieuw vóór bevestiging.')
         if imported.has_errors:raise ValueError('Los de Pl@net-importfouten eerst op; geen maanden opgeslagen.')
         if not imported.report.months:raise ValueError('Geen shiften gevonden in het bronbestand.')
+        # A path inside an app/container is not durable across deployments. Keep
+        # the validated workbook in SQLite as well, so historical months can be
+        # recalculated after a restart or migration.
+        source_path=Path(source)
+        db.execute('''INSERT OR IGNORE INTO matching_sources
+            (source_sha256,filename,content,created_at) VALUES(?,?,?,?)''',
+            (imported.report.source_sha256,source_path.name,source_path.read_bytes(),
+             datetime.now(timezone.utc).isoformat()))
         config=self.matching_config(db);results=[]
         excluded={r['month'] for r in db.execute('SELECT month FROM excluded_months')}
         selected_imports=[]
@@ -474,6 +505,27 @@ class RouteStore(Store):
             results.append({'month':month,'run_id':self.insert_matching(db,payload,source),'summary':payload['summary']})
         return results
 
+    def matching_source(self,db,run,payload=None):
+        """Return a readable source, restoring its durable database copy if needed."""
+        source=Path(run['source_path'])
+        if source.is_file():return source
+        payload=payload or json.loads(run['payload'])
+        source_hash=payload.get('source_sha256')
+        if source_hash:
+            # An older run with the same upload may still point to a surviving copy.
+            for candidate in db.execute('''SELECT source_path FROM matching_runs
+                WHERE json_extract(payload,'$.source_sha256')=? ORDER BY id DESC''',(source_hash,)):
+                path=Path(candidate['source_path'])
+                if path.is_file():return path
+            saved=db.execute('SELECT content FROM matching_sources WHERE source_sha256=?',(source_hash,)).fetchone()
+            if saved:
+                directory=self.path.parent/'planet_uploads';directory.mkdir(parents=True,exist_ok=True);directory.chmod(0o700)
+                restored=directory/f'planet-{source_hash[:16]}.xlsx'
+                temporary=restored.with_suffix('.tmp')
+                temporary.write_bytes(saved['content']);temporary.chmod(0o600);temporary.replace(restored)
+                return restored
+        raise ValueError('Het oorspronkelijke Pl@net-bestand van deze maand is niet meer beschikbaar. Upload dat exportbestand opnieuw; daarna kan de maand opnieuw worden berekend.')
+
     def apply_matching(self,action,data,revision):
         from app.matching import key
         with self.transaction(revision) as db:
@@ -481,7 +533,7 @@ class RouteStore(Store):
             if not run:raise ValueError('Importeer eerst een maand met scripts/match_planet.py.')
             previous=json.loads(run['payload'])
             if action=='matching_refresh':
-                self.process_matching_file(db,run['source_path'])
+                self.process_matching_file(db,self.matching_source(db,run,previous))
                 return
             reason=required(data.get('reason'))
             if action=='matching_employee_ignore':
@@ -513,7 +565,7 @@ class RouteStore(Store):
                 if not db.execute('SELECT 1 FROM routes WHERE location_key=?',(norm(location),)).fetchone():raise ValueError('Kies een bestaande fysieke locatie.')
                 db.execute('INSERT INTO matching_location_links VALUES(?,?) ON CONFLICT(customer) DO UPDATE SET location=excluded.location',(key(customer),location))
             db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',(datetime.now(timezone.utc).isoformat(),reason,json.dumps({'action':action,**data})))
-            self.process_matching_file(db,run['source_path'],previous['source_sha256'])
+            self.process_matching_file(db,self.matching_source(db,run,previous),previous['source_sha256'])
 
     def resolve(self,route,day):
         with self.connect() as db:
