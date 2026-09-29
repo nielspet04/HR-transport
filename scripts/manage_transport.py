@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--month',help='Verplichte YYYY-MM-selectie bij --planet')
     parser.add_argument('--seed-only',action='store_true')
     parser.add_argument('--port',type=int,default=8765)
+    parser.add_argument('--require-auth',action='store_true',help='Weiger te starten zolang lokale of Microsoft-login niet volledig is geconfigureerd')
     parser.add_argument('--backup',type=Path,help='Nieuwe databasebackup; bestaand bestand wordt geweigerd')
     args=parser.parse_args()
     if args.planet and not args.month:parser.error('--planet vereist --month')
@@ -40,6 +41,9 @@ def main():
             elif args.confirm_reference_from:raise ValueError('Geef de nieuwe referentie-Excel mee.')
             if args.backup:store.backup(args.backup);print('Lokale databasebackup opgeslagen.')
             if args.seed_only:return 0
+            if args.require_auth:
+                from app.microsoft_auth import AuthSettings
+                if not AuthSettings.from_env().enabled:raise ValueError('Authenticatie is verplicht maar lokale noch Microsoft-login is volledig geconfigureerd.')
             server=make_server(store,args.port)
         else:
             return legacy_main(args,reference)

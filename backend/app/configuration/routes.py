@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS extra_shift_tariffs(id INTEGER PRIMARY KEY,valid_from
 class RouteStore(Store):
     def __init__(self,path):
         self.path=Path(path)
+        self._analytics_cache=None
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.connect() as db:
             db.executescript(SCHEMA)
@@ -153,7 +154,7 @@ class RouteStore(Store):
             from app.automatic_routes import trigger
             trigger(self);return
         result=self._apply(action,data,revision)
-        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','employee_onboard','customer_onboard','address_save','address_link','location_address_save','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','transport_default'):
+        if action in ('planet_upload','matching_refresh','matching_employee','matching_location','employee_onboard','customer_onboard','address_save','address_link','location_address_save','location_geocode','location_geocode_review','route_add','route_historical','worker_rename','geocode_review','geocode_review_many','shift_transport_choice','transport_default'):
             from app.automatic_routes import trigger
             trigger(self)
         return result
@@ -190,6 +191,9 @@ class RouteStore(Store):
         if action=='location_geocode':
             from .location_addresses import geocode
             return geocode(self,data,revision)
+        if action=='location_geocode_review':
+            from .location_addresses import review_geocode
+            return review_geocode(self,data,revision)
         if action=='geocode_review_many':
             from app.geocoding import review_many
             return review_many(self,data,revision)
@@ -340,6 +344,15 @@ class RouteStore(Store):
             row=db.execute('SELECT id,payload FROM matching_runs WHERE id=? AND month NOT IN (SELECT month FROM excluded_months)',(run_id,)).fetchone()
             if not row:raise ValueError('Onbekende maandverwerking.')
             return self.matching_payload(row,self.matching_config(db),db)
+
+    def get_analytics(self):
+        from app.analytics import build
+        with self.connect() as db:revision=db.execute('SELECT revision FROM meta').fetchone()[0]
+        if self._analytics_cache and self._analytics_cache[0]==revision:return self._analytics_cache[1]
+        result=build(self)
+        with self.connect() as db:current=db.execute('SELECT revision FROM meta').fetchone()[0]
+        if current==revision:self._analytics_cache=(revision,result)
+        return result
 
     @staticmethod
     def insert_matching(db,payload,source):

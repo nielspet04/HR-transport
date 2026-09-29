@@ -78,12 +78,28 @@ def test_location_geocoding_persists_and_reuses(tmp_path,monkeypatch):
     assert len(calls)==1
     assert store.snapshot()['location_addresses'][0]['geocode_status']=='REVIEW'
     assert store.snapshot()['location_geocoding_plan']['requests']==0
+    store.apply('location_geocode_review',{'address_id':aid,'accept':True,'reason':'Locatie gecontroleerd'},store.snapshot()['revision'])
+    assert store.snapshot()['location_addresses'][0]['geocode_status']=='CONFIRMED'
     store.apply('location_address_save',data(start='2026-02-01'),store.snapshot()['revision'])
-    assert store.snapshot()['location_addresses'][-1]['geocode_status']=='REVIEW'
+    assert store.snapshot()['location_addresses'][-1]['geocode_status']=='CONFIRMED'
     store.apply('location_address_save',data(start='2026-03-01',number='99'),store.snapshot()['revision'])
     assert store.snapshot()['location_addresses'][-1]['geocode_status']=='NOT_REQUESTED'
     with pytest.raises(ValueError):store.apply('location_geocode',{'address_id':aid,'consent':True},store.snapshot()['revision'])
     assert len(calls)==1
+
+
+def test_uncertain_location_review_requires_explicit_confirmation(tmp_path,monkeypatch):
+    from app import geocoding
+    store=prepared(tmp_path);store.apply('location_address_save',data(),store.snapshot()['revision'])
+    aid=store.snapshot()['location_addresses'][0]['id']
+    monkeypatch.setattr(geocoding,'token_value',lambda:'pk.fake')
+    monkeypatch.setattr(geocoding,'request_address',lambda address:{'status':'REVIEW','longitude':4.4,'latitude':50.9,'eligible':False})
+    store.apply('location_geocode',{'address_id':aid,'consent':True},store.snapshot()['revision'])
+    with pytest.raises(ValueError):
+        store.apply('location_geocode_review',{'address_id':aid,'accept':True,'reason':'Controle'},store.snapshot()['revision'])
+    assert store.snapshot()['location_addresses'][0]['geocode_status']=='REVIEW'
+    store.apply('location_geocode_review',{'address_id':aid,'accept':True,'confirm_uncertain':True,'reason':'Handmatig gecontroleerd'},store.snapshot()['revision'])
+    assert store.snapshot()['location_addresses'][0]['geocode_status']=='CONFIRMED'
 
 
 def test_location_errors_remain_visible_without_retry(tmp_path,monkeypatch):

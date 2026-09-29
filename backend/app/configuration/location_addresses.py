@@ -91,6 +91,51 @@ def geocode(store, data, revision):
                    (now, 'Permanente locatiegeocodering op verzoek HR', json.dumps({'action': 'location_geocode', 'location_address_id': address_id})))
 
 
+def review_geocode(store, data, revision):
+    """Confirm or reject the shared Mapbox result for a current location address."""
+    from app import geocoding
+    with store.transaction(revision) as db:
+        address_id = data.get('address_id')
+        if type(address_id) is not int:
+            raise ValueError('Kies een locatieadres.')
+        row = db.execute('SELECT * FROM location_address_versions WHERE id=?', (address_id,)).fetchone()
+        if not row:
+            raise ValueError('Onbekend locatieadres.')
+        current = db.execute(
+            'SELECT id FROM location_address_versions WHERE location_key=? AND valid_from<=? '
+            'ORDER BY valid_from DESC,id DESC LIMIT 1',
+            (row['location_key'], date.today().isoformat())).fetchone()
+        if not current or current['id'] != address_id:
+            raise ValueError('Locatieadres is niet meer actueel. Vernieuw de lijst.')
+        digest = geocoding.fingerprint(json.loads(row['address']))
+        saved = db.execute('SELECT * FROM address_geocodes WHERE address_hash=?', (digest,)).fetchone()
+        if not saved or saved['status'] != 'REVIEW':
+            raise ValueError('Dit Mapbox-resultaat staat niet meer klaar voor controle.')
+        if type(data.get('accept')) is not bool:
+            raise ValueError('Kies bevestigen of afwijzen.')
+        reason = required(data.get('reason'))
+        result = json.loads(saved['result'])
+        if data['accept'] and not result.get('eligible') and data.get('confirm_uncertain') is not True:
+            raise ValueError('Bevestig dat je deze onzekere locatie handmatig hebt gecontroleerd.')
+        if data['accept']:
+            import math
+            longitude, latitude = result.get('longitude'), result.get('latitude')
+            if (not isinstance(longitude, (int, float)) or isinstance(longitude, bool)
+                    or not isinstance(latitude, (int, float)) or isinstance(latitude, bool)
+                    or not math.isfinite(longitude) or not math.isfinite(latitude)
+                    or not -180 <= longitude <= 180 or not -90 <= latitude <= 90):
+                raise ValueError('Mapbox-resultaat bevat geen geldige coördinaten.')
+        status = 'CONFIRMED' if data['accept'] else 'REJECTED'
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute('UPDATE address_geocodes SET status=?,reviewed_at=?,reason=? WHERE id=?',
+                   (status, now, reason, saved['id']))
+        db.execute('INSERT INTO matching_audit(changed_at,reason,details) VALUES(?,?,?)',
+                   (now, reason, json.dumps({'action': 'location_geocode_review',
+                                             'location_address_id': address_id,
+                                             'status': status,
+                                             'confirm_uncertain': data.get('confirm_uncertain') is True})))
+
+
 def save(db, data):
     key = norm(required(data.get('location')))
     known = {item['key']: item for item in catalog(db)}

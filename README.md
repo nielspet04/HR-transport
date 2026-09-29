@@ -66,6 +66,16 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 ```
 
+## Beveiligde login
+
+De frontend en backend ondersteunen een tijdelijke lokale beheerlogin met een
+Argon2id-wachtwoordhash. Later kan single-tenant Microsoft 365 / Entra ID-login
+zonder lokaal wachtwoord worden ingeschakeld; die krijgt automatisch voorrang.
+De lokale ontwikkelmodus blijft standaard actief. Een gedeelde of
+productieomgeving moet met `--require-auth` starten. Zie
+[`docs/microsoft_auth_setup.md`](docs/microsoft_auth_setup.md) voor het aanmaken
+van een lokaal account, de Entra-appregistratie en de veilige serverconfiguratie.
+
 ## Tests
 
 ```bash

@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const nav = [['overview', 'Overzicht'], ['actions', 'Acties'], ['review', 'Maandcontrole'], ['employees', 'Werknemers'], ['locations', 'Locaties'], ['settings', 'Instellingen']]
+const nav = [['overview', 'Overzicht'], ['actions', 'Acties'], ['review', 'Maandcontrole'], ['analytics', 'Analytics'], ['employees', 'Werknemers'], ['locations', 'Locaties'], ['technical', 'Technisch beheer'], ['settings', 'Instellingen']]
 const modes = ['Privé auto', 'Fiets', 'Trein', 'Dienstwagen', 'Mob budget']
 const shiftModes = [['DEFAULT', 'Standaard'], ['AUTO', 'Privéauto'], ['BIKE', 'Fiets'], ['TRAIN', 'Trein'], ['COMPANY_CAR', 'Dienstwagen'], ['MOBILITY_BUDGET', 'Mobiliteitsbudget'], ['TELEWORK', 'Telework']]
 const euro = value => new Intl.NumberFormat('nl-BE', { style: 'currency', currency: 'EUR' }).format(Number(value || 0))
+const number = (value, maximumFractionDigits = 1) => new Intl.NumberFormat('nl-BE', { maximumFractionDigits }).format(Number(value || 0))
 const kmRate = value => `€ ${String(value ?? '—').replace('.', ',')}/km`
 const norm = value => String(value || '').trim().toLocaleLowerCase('nl').replace(/\s+/g, ' ')
 const today = () => new Date().toISOString().slice(0, 10)
@@ -46,7 +47,9 @@ function deriveDashboard(state, matching) {
   if (matching.stale) actions.push({ level: 'Hoog', title: 'Maand gebruikt gewijzigde instellingen', count: 1, kind: 'refresh' })
   if (monthly.external_reference_missing) actions.push({ level: 'Hoog', title: 'Loonnummer ontbreekt', count: monthly.external_reference_missing, kind: 'payroll' })
   if (monthly.external_reference_changed) actions.push({ level: 'Hoog', title: 'Loonnummer wijzigde tijdens de maand', count: monthly.external_reference_changed, kind: 'payroll' })
-  const processing = ['QUEUED', 'RUNNING'].includes(state.automatic_routes?.status)
+  const automaticStatus = state.automatic_routes?.status
+  const processing = ['QUEUED', 'RUNNING'].includes(automaticStatus)
+    && (!monthly.ready || matching.stale || Boolean(state.route_issues?.length))
   const ready = monthly.ready && monthly.external_references_ready && !matching.stale
   const status = processing ? 'Routes worden berekend' : actions.length || monthly.blocking ? 'Actie nodig' : ready ? 'Klaar voor Accerta-export' : 'Klaar voor controle'
   return { month: matching.month, runId: matching.run_id, status, tone: status === 'Actie nodig' ? 'warning' : ready ? 'success' : 'neutral', employees: monthly.employee_count || matching.summary?.agents || 0, movements: matching.summary?.movements || 0, sourceShifts: matching.summary?.source_shifts || 0, excluded: monthly.excluded || 0, total: monthly.calculated_total || 0, actions, step: processing || actions.length ? 2 : ready ? 4 : 3 }
@@ -75,6 +78,35 @@ function AddressFields({ prefix = '', value = {} }) { return <div className="for
 </Field>
 </div> }
 function addressFrom(form, prefix = '') { return Object.fromEntries(['street', 'number', 'unit', 'postal_code', 'city', 'country'].map(key => [key, form.get(`${prefix}${key}`) || ''])) }
+function addressLabel(address) { return address ? `${address.street} ${address.number}${address.unit ? ` bus ${address.unit}` : ''}, ${address.postal_code} ${address.city} · ${address.country}` : 'Adres ontbreekt' }
+
+function RouteCorrection({ routeId, workerId, state, save }) {
+  const route = (state.route_distances || []).find(item => item.id === routeId)
+  if (!route || route.status !== 'READY') return null
+  const active = (route.overrides || []).find(item => item.worker_id === workerId)
+  const history = (route.correction_history || []).filter(item => item.worker_id === workerId).slice().reverse()
+  const submit = (event, reset = false) => {
+    event.preventDefault()
+    const formElement = event.currentTarget.tagName === 'FORM' ? event.currentTarget : event.currentTarget.form
+    if (!formElement.reportValidity()) return
+    const form = new FormData(formElement)
+    save('route_distance_override', { route_id: routeId, worker_id: workerId, ...(reset ? { reset: true } : { kms: form.get('kms') }), reason: form.get('reason') })
+  }
+  return <details className="route-correction">
+<summary>{active ? `HR-correctie: ${active.kms} km` : 'Echte afstand corrigeren'}</summary>
+<p>Mapbox blijft bewaard op <strong>{route.kms} km</strong>. Een correctie geldt alleen voor deze werknemer en wordt opgenomen in de berekening en audittrail.</p>
+<form onSubmit={submit}>
+<Field label="Enkele kilometers">
+<input name="kms" type="number" min="0" max="100000" step="1" defaultValue={active?.kms ?? route.kms} required />
+</Field>
+<Field label="Reden">
+<input name="reason" maxLength="500" placeholder="Waarom wijkt HR af van Mapbox?" required />
+</Field>
+<button className="primary">Correctie opslaan</button>{active && <button type="button" className="secondary" onClick={event => submit(event, true)}>Mapbox herstellen</button>}
+</form>{history.length > 0 && <details className="correction-history">
+<summary>Correctiehistoriek ({history.length})</summary>{history.map(item => <p key={item.id}>{new Date(item.changed_at).toLocaleString('nl-BE')} · {item.kms == null ? 'Mapbox hersteld' : `${item.kms} km`} · {item.reason}</p>)}</details>}
+</details>
+}
 
 function Progress({ step }) { const labels = ['Export uploaden', 'Gegevens aanvullen', 'Controleren', 'Exporteren']; return <div className="progress">{labels.map((label, index) => <div className={`progress-item ${index + 1 <= step ? 'done' : ''}`} key={label}>
 <span>{index + 1 < step ? '✓' : index + 1}</span>
@@ -464,6 +496,84 @@ function MonthReview({ matching, save }) {
 </div>}</>
 }
 
+function AnalyticsBar({ label, value, maximum, detail, rank }) {
+  const width = maximum ? Math.max(3, Number(value) / maximum * 100) : 0
+  return <div className="analytics-bar-row">
+<span className="analytics-rank">{rank || ''}</span>
+<div className="analytics-bar-copy"><strong>{label}</strong><small>{detail}</small></div>
+<div className="analytics-bar-track" aria-hidden="true"><i style={{ width: `${width}%` }} /></div>
+<b>{euro(value)}</b>
+</div>
+}
+
+function Analytics({ analytics, month, loading, error }) {
+  const [trendMetric, setTrendMetric] = useState('cost')
+  if (loading && !analytics) return <div className="analytics-loading"><div className="loader" /><strong>Analytics worden berekend…</strong><span>Alle geïmporteerde maanden worden samengevat.</span></div>
+  if (error && !analytics) return <div className="empty"><span>!</span><strong>Analytics konden niet worden geladen</strong><p>{error}</p></div>
+  const months = analytics?.months || []
+  const selected = months.find(item => item.month === month) || months.at(-1)
+  if (!selected) return <><header className="simple-header"><p className="eyebrow">ANALYTICS</p><h1>Vervoersanalyse</h1><p>Importeer eerst een maand om kosten en kilometers te analyseren.</p></header><div className="empty"><span>↗</span><strong>Nog geen maandgegevens</strong></div></>
+  const employees = (analytics.employees_by_month?.[selected.month] || []).slice(0, 10)
+  const customers = analytics.customers_by_month?.[selected.month] || []
+  const maxEmployee = Math.max(...employees.map(item => Number(item.cost)), 0)
+  const trendValues = months.map(item => Number(item[trendMetric] || 0))
+  const trendMaximum = Math.max(...trendValues, 1)
+  const trendPoints = months.map((item, index) => {
+    const x = months.length === 1 ? 360 : 42 + index * (636 / (months.length - 1))
+    const y = 190 - (Number(item[trendMetric] || 0) / trendMaximum * 145)
+    return { item, x, y }
+  })
+  return <>
+<header className="simple-header analytics-header">
+<p className="eyebrow">ANALYTICS · {monthLabel(selected.month).toUpperCase()}</p>
+<h1>Vervoersanalyse</h1>
+<p>Kosten, vergoede kilometers en uren op basis van dezelfde gecontroleerde berekeningen als de maandcontrole.</p>
+</header>
+<section className="analytics-kpis">
+<article><span>Totaal vergoede km</span><strong>{number(selected.kms)} km</strong><small>{selected.shifts} berekende shiften</small></article>
+<article><span>Totale kost</span><strong>{euro(selected.cost)}</strong><small>{selected.employee_count} werknemers met vergoeding</small></article>
+<article><span>Gem. km / werknemer / shift</span><strong>{number(selected.average_employee_kms)} km</strong><small>Eerst per werknemer, daarna gemiddeld</small></article>
+<article><span>Gem. kost / werknemer / shift</span><strong>{euro(selected.average_employee_cost)}</strong><small>{euro(selected.average_hour_cost)} gemiddeld per uur</small></article>
+</section>
+<section className="analytics-grid">
+<article className="analytics-panel analytics-trend">
+<div className="analytics-panel-head"><div><p className="eyebrow">MAANDTREND</p><h2>Alle opgeslagen maanden</h2></div><span>{months.length} maanden</span></div>
+<div className="trend-switch" aria-label="Trendmetriek"><button className={trendMetric === 'cost' ? 'active' : ''} onClick={() => setTrendMetric('cost')}>Kosten</button><button className={trendMetric === 'kms' ? 'active' : ''} onClick={() => setTrendMetric('kms')}>Kilometers</button></div>
+<div className="trend-chart" role="img" aria-label={`${trendMetric === 'cost' ? 'Kosten' : 'Kilometers'} per opgeslagen maand`}>
+<svg viewBox="0 0 720 230" preserveAspectRatio="none" aria-hidden="true">
+<line x1="42" y1="45" x2="678" y2="45" /><line x1="42" y1="117.5" x2="678" y2="117.5" /><line x1="42" y1="190" x2="678" y2="190" />
+<polyline points={trendPoints.map(point => `${point.x},${point.y}`).join(' ')} />
+{trendPoints.map(point => <g key={point.item.month}><circle className={point.item.month === selected.month ? 'selected' : ''} cx={point.x} cy={point.y} r="5" /><text className="trend-value" x={point.x} y={Math.max(point.y - 12, 18)} textAnchor="middle">{trendMetric === 'cost' ? euro(point.item.cost).replace(/\s/g, '') : `${number(point.item.kms)} km`}</text><text className="trend-label" x={point.x} y="215" textAnchor="middle">{point.item.month.slice(5)}/{point.item.month.slice(2, 4)}</text></g>)}
+</svg>
+</div>
+<div className="trend-summary"><span><i />{trendMetric === 'cost' ? 'Totale kost' : 'Vergoede kilometers'}</span><strong>{trendMetric === 'cost' ? euro(selected.cost) : `${number(selected.kms)} km`} · {monthLabel(selected.month)}</strong></div>
+</article>
+<article className="analytics-panel analytics-averages">
+<div className="analytics-panel-head"><div><p className="eyebrow">WERKNEMERSNIVEAU</p><h2>Gemiddelde kost</h2></div></div>
+<div className="average-feature"><span>Per berekende shift</span><strong>{euro(selected.average_shift_cost)}</strong></div>
+<div className="average-feature"><span>Per gepresteerd uur</span><strong>{selected.average_hour_cost == null ? '—' : euro(selected.average_hour_cost)}</strong></div>
+<p>Uren komen uit de begin- en einduren van de bronshiften. Uitgesloten en geblokkeerde shiften tellen niet mee.</p>
+</article>
+</section>
+<section className="analytics-panel employee-ranking">
+<div className="analytics-panel-head"><div><p className="eyebrow">WERKNEMERSNIVEAU</p><h2>Top 10 werknemers · maandkost</h2></div><span>{monthLabel(selected.month)}</span></div>
+{employees.length ? <div>{employees.map((item, index) => <AnalyticsBar key={`${item.worker_id}-${item.name}`} rank={index + 1} label={item.name} value={item.cost} maximum={maxEmployee} detail={`${number(item.kms)} km · ${item.shifts} shiften · ${item.average_hour_cost == null ? 'geen uren' : `${euro(item.average_hour_cost)}/uur`}`} />)}</div> : <div className="empty compact"><strong>Geen berekende werknemerskosten</strong></div>}
+</section>
+<section className="analytics-panel customer-analytics">
+<div className="analytics-panel-head"><div><p className="eyebrow">KLANTNIVEAU</p><h2>Kilometers en kosten per klant</h2></div><span>{customers.length} klanten</span></div>
+<div className="analytics-table-wrap"><table><thead><tr><th>Klant</th><th>Vergoede km</th><th>Totale kost</th><th>Uren</th><th>Kost / uur</th></tr></thead><tbody>{customers.map(item => <tr key={item.customer}><td><strong>{item.customer}</strong></td><td>{number(item.kms)} km</td><td><strong>{euro(item.cost)}</strong></td><td>{number(item.hours)} u</td><td>{item.cost_per_hour == null ? '—' : euro(item.cost_per_hour)}</td></tr>)}</tbody></table></div>
+<div className="customer-analytics-cards">{customers.map(item => <article key={item.customer}>
+<h3>{item.customer}</h3>
+<div><span>Vergoede kilometers</span><strong>{number(item.kms)} km</strong></div>
+<div><span>Totale kost</span><strong>{euro(item.cost)}</strong></div>
+<small>{number(item.hours)} gepresteerde uren · {item.cost_per_hour == null ? 'geen uurkost' : `${euro(item.cost_per_hour)} per uur`}</small>
+</article>)}</div>
+{!customers.length && <div className="empty compact"><strong>Geen berekende klantkosten</strong></div>}
+</section>
+<p className="analytics-method">{analytics.method}</p>
+</>
+}
+
 function RouteMapModalDiagram({ route, csrf, onClose }) {
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
@@ -742,7 +852,7 @@ function WorkerDialog({ workerId, state, onClose, save }) {
 <strong>Routekaarten</strong>
 <small>Opgeslagen routes · eenmalig aangevuld indien nodig</small>
 </div>
-<div className="route-map-dock-list">{maps.map(map => { const configuredRoute = routes.find(route => route.location_key === map.location_key && norm(route.mode) === norm(map.mode)); const configured = configuredRoute && latest(state.versions || [], item => item.route_id === configuredRoute.id); return <button type="button" key={`${map.route_id}-${map.mode}-${map.origin_location || 'home'}`} onClick={() => setSelectedMap({ ...map, worker_name: worker?.name, configured_kms: configured?.kms })}>
+<div className="route-map-dock-list">{maps.map(map => { const configuredRoute = routes.find(route => route.location_key === map.location_key && norm(route.mode) === norm(map.mode)); const configured = configuredRoute && latest(state.versions || [], item => item.route_id === configuredRoute.id); return <article className="route-map-item" key={`${map.route_id}-${map.mode}-${map.origin_location || 'home'}`}><button type="button" onClick={() => setSelectedMap({ ...map, worker_name: worker?.name, configured_kms: configured?.kms })}>
 <span>⌁</span>
 <span>
 <strong>{map.origin_location ? `${map.origin_location} → ${map.location}` : map.location}</strong>
@@ -750,7 +860,7 @@ function WorkerDialog({ workerId, state, onClose, save }) {
 </span>
 <b>{map.kms} km</b>
 <em>Kaart →</em>
-</button> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden.</p>}</div>
+</button><RouteCorrection routeId={map.route_id} workerId={workerId} state={state} save={save} /></article> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden.</p>}</div>
 </section>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
 }
 
@@ -831,7 +941,7 @@ function LocationDialog({ locationKey, state, onClose, save }) {
 <strong>Routes naar {location?.name}</strong>
 <small>Per werknemer en vervoersmiddel</small>
 </div>
-<div className="route-map-dock-list">{maps.map(map => { const worker = state.workers.find(item => item.id === map.worker_id); return <button type="button" key={`${map.route_id}-${map.worker_id}-${map.mode}`} onClick={() => setSelectedMap({ ...map, worker_name: worker?.name })}>
+<div className="route-map-dock-list">{maps.map(map => { const worker = state.workers.find(item => item.id === map.worker_id); return <article className="route-map-item" key={`${map.route_id}-${map.worker_id}-${map.mode}`}><button type="button" onClick={() => setSelectedMap({ ...map, worker_name: worker?.name })}>
 <span>⌁</span>
 <span>
 <strong>{worker?.name || 'Werknemer'}</strong>
@@ -839,7 +949,7 @@ function LocationDialog({ locationKey, state, onClose, save }) {
 </span>
 <b>{map.kms} km</b>
 <em>Kaart →</em>
-</button> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden naar deze locatie.</p>}</div>
+</button><RouteCorrection routeId={map.route_id} workerId={map.worker_id} state={state} save={save} /></article> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden naar deze locatie.</p>}</div>
 </section>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
 }
 
@@ -856,6 +966,87 @@ function Locations({ state, onSelect }) { return <>
 <small>{location.customers.length} gekoppelde klanten</small>
 </button> })}</div>
 </> }
+
+function CandidateQueue({ state, save }) {
+  const addressCandidates = (state.address_candidates || []).filter(item => item.status === 'REVIEW')
+  const referenceCandidates = (state.external_reference_candidates || []).filter(item => item.status === 'REVIEW')
+  const suggestedWorker = candidate => candidate.worker_id || state.workers.find(worker => norm(worker.name) === norm(candidate.name))?.id || ''
+  const workerOptions = <>{state.workers.map(worker => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</>
+  return <section className="technical-section">
+<div className="technical-section-head">
+<div><p className="eyebrow">IMPORTCONTROLE</p><h2>Geïmporteerde kandidaten</h2></div>
+<span className={addressCandidates.length + referenceCandidates.length ? 'count attention' : 'count'}>{addressCandidates.length + referenceCandidates.length} te beoordelen</span>
+</div>
+{!addressCandidates.length && !referenceCandidates.length ? <div className="empty compact"><span>✓</span><strong>Geen kandidaten meer te beoordelen</strong></div> : <div className="candidate-grid">
+{addressCandidates.map(candidate => <form className="candidate-card" key={`address-${candidate.id}`} onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('address_link', { candidate_id: candidate.id, worker_id: Number(form.get('worker_id')), reason: form.get('reason') }) }}>
+<span>Woonadres</span><h3>{candidate.name}</h3><p>{addressLabel(candidate.address)}</p>
+<Field label="Koppelen aan werknemer"><select name="worker_id" defaultValue={suggestedWorker(candidate)} required><option value="">Kies werknemer</option>{workerOptions}</select></Field>
+<Field label="Reden"><input name="reason" defaultValue="Geïmporteerd adres handmatig gecontroleerd" required /></Field>
+<div className="candidate-actions"><button className="primary">Koppelen</button><button type="button" className="secondary" onClick={event => { const reason = event.currentTarget.form.elements.reason; if (!reason.reportValidity()) return; save('address_ignore', { candidate_id: candidate.id, reason: reason.value }) }}>Negeren</button></div>
+</form>)}
+{referenceCandidates.map(candidate => <form className="candidate-card" key={`reference-${candidate.id}`} onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save('external_reference_link', { candidate_id: candidate.id, worker_id: Number(form.get('worker_id')), reason: form.get('reason') }) }}>
+<span>Loonnummer</span><h3>{candidate.name}</h3><p>Extern loonnummer: <strong>{candidate.external_reference}</strong></p>
+<Field label="Koppelen aan werknemer"><select name="worker_id" defaultValue={suggestedWorker(candidate)} required><option value="">Kies werknemer</option>{workerOptions}</select></Field>
+<Field label="Reden"><input name="reason" defaultValue="Geïmporteerd loonnummer handmatig gecontroleerd" required /></Field>
+<div className="candidate-actions"><button className="primary">Koppelen</button><button type="button" className="secondary" onClick={event => { const reason = event.currentTarget.form.elements.reason; if (!reason.reportValidity()) return; save('external_reference_ignore', { candidate_id: candidate.id, reason: reason.value }) }}>Negeren</button></div>
+</form>)}</div>}
+</section>
+}
+
+function GeocodeReview({ item, owner, kind, save }) {
+  const geocode = item.geocode
+  const result = geocode?.result || {}
+  const status = item.geocode_status || 'NOT_REQUESTED'
+  const requestAction = kind === 'location' ? 'location_geocode' : 'address_geocode'
+  return <article className={`geocode-card ${status.toLowerCase()}`}>
+<div className="geocode-card-head"><div><strong>{owner}</strong><small>{kind === 'location' ? 'Werklocatie' : 'Werknemer'} · {addressLabel(item.address)}</small></div><span>{status === 'REVIEW' ? 'Nakijken' : status === 'NO_MATCH' ? 'Geen match' : status === 'ERROR' ? 'Fout' : 'Niet aangevraagd'}</span></div>
+{result.label && <p><strong>Mapbox:</strong> {result.label}</p>}{result.message && <p>{result.message}</p>}
+{status === 'NOT_REQUESTED' && <button className="secondary" onClick={() => save(requestAction, { address_id: item.id, consent: true })}>Coördinaten aanvragen</button>}
+{status === 'REVIEW' && <form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); save(kind === 'location' ? 'location_geocode_review' : 'geocode_review', { address_id: item.id, accept: true, confirm_uncertain: form.get('confirm_uncertain') === 'on', reason: form.get('reason') }) }}>
+<p>Nauwkeurigheid: {result.accuracy || 'onbekend'} · vertrouwen: {result.confidence || 'onbekend'}</p>
+{!result.eligible && <label className="check"><input type="checkbox" name="confirm_uncertain" /> Ik heb deze onzekere locatie handmatig gecontroleerd</label>}
+<Field label="Reden"><input name="reason" defaultValue="Mapbox-resultaat handmatig gecontroleerd" required /></Field>
+<div className="candidate-actions"><button className="primary">Bevestigen</button><button type="button" className="secondary" onClick={event => { const form = event.currentTarget.form; const reason = form.elements.reason; if (!reason.reportValidity()) return; save(kind === 'location' ? 'location_geocode_review' : 'geocode_review', { address_id: item.id, accept: false, reason: reason.value }) }}>Afwijzen</button></div>
+</form>}
+{(status === 'NO_MATCH' || status === 'ERROR') && <p className="hint">Pas het opgeslagen adres aan om een nieuwe, unieke aanvraag mogelijk te maken. Dezelfde mislukte aanvraag wordt bewust niet automatisch herhaald.</p>}
+</article>
+}
+
+function TechnicalManagement({ state, save, onRouteExport, busy }) {
+  const currentRows = (rows, key) => { const selected = new Map(); for (const row of rows.filter(item => item.valid_from <= today()).sort((a, b) => a.valid_from.localeCompare(b.valid_from) || a.id - b.id)) selected.set(row[key], row); return [...selected.values()] }
+  const workerAddresses = currentRows(state.addresses || [], 'worker_id')
+  const locationAddresses = currentRows(state.location_addresses || [], 'location_key')
+  const attention = [
+    ...workerAddresses.filter(item => item.geocode_status !== 'CONFIRMED').map(item => ({ item, kind: 'worker', owner: state.workers.find(worker => worker.id === item.worker_id)?.name || 'Onbekende werknemer' })),
+    ...locationAddresses.filter(item => item.geocode_status !== 'CONFIRMED').map(item => ({ item, kind: 'location', owner: item.location }))
+  ]
+  const routes = state.route_distances || []
+  const readyRoutes = routes.filter(item => item.status === 'READY').length
+  const corrections = routes.reduce((total, item) => total + (item.overrides || []).length + (item.transfer_override ? 1 : 0), 0)
+  const automatic = state.automatic_routes || {}
+  const report = automatic.report || {}
+  return <>
+<header className="simple-header"><p className="eyebrow">SYSTEEMBEHEER</p><h1>Technisch beheer</h1><p>Mapbox-verwerking, routecontrole, echte afstandscorrecties en geïmporteerde gegevens op één plaats.</p></header>
+<section className="technical-stats">
+<article><span>Mapbox</span><strong>{state.mapbox_configured ? 'Verbonden' : 'Token ontbreekt'}</strong><small>{automatic.enabled ? 'Automatisch actief' : 'Automatisch uitgeschakeld'}</small></article>
+<article><span>Verwerking</span><strong>{automatic.status || 'Onbekend'}</strong><small>{report.routes || 0} routes · {report.errors || 0} fouten in laatste run</small></article>
+<article><span>Routecache</span><strong>{readyRoutes} gereed</strong><small>{routes.length - readyRoutes} niet gereed · {corrections} HR-correcties</small></article>
+<article><span>Controle</span><strong>{attention.length} adressen</strong><small>{report.attention_results || 0} aandachtspunten in laatste run</small></article>
+</section>
+<section className="technical-section">
+<div className="technical-section-head"><div><p className="eyebrow">AUTOMATISCHE VERWERKING</p><h2>Mapbox en routes</h2></div><span className={`status ${automatic.status === 'DONE' ? 'success' : automatic.status === 'ERROR' || automatic.status === 'BLOCKED' ? 'warning' : ''}`}>{automatic.status}</span></div>
+<p>Nieuwe adressen en ontbrekende routes worden alleen aangevraagd wanneer automatische verwerking actief is. Opgeslagen resultaten worden nooit stil opnieuw aangevraagd.</p>
+<div className="technical-actions"><button className="primary" disabled={busy || !state.mapbox_configured} onClick={() => save('automatic_process', {})}>Verwerking starten of hervatten</button><button className="secondary" disabled={busy} onClick={() => save('automatic_settings', { enabled: !automatic.enabled, consent: !automatic.enabled })}>{automatic.enabled ? 'Automatische verwerking uitschakelen' : 'Automatische verwerking inschakelen'}</button><button className="secondary" disabled={busy || !state.matching?.run_id} onClick={onRouteExport}>Controlebestand downloaden</button></div>
+<p className="hint">Het controlebestand bevat alle opgeslagen afstanden en behouden shiften van de geselecteerde exportverwerking.</p>
+</section>
+<section className="technical-section">
+<div className="technical-section-head"><div><p className="eyebrow">GEOCODERING</p><h2>Adresresultaten nakijken</h2></div><span className={attention.length ? 'count attention' : 'count'}>{attention.length} aandachtspunten</span></div>
+{attention.length ? <div className="geocode-grid">{attention.map(entry => <GeocodeReview key={`${entry.kind}-${entry.item.id}`} {...entry} save={save} />)}</div> : <div className="empty compact"><span>✓</span><strong>Alle huidige adressen hebben bevestigde coördinaten</strong></div>}
+</section>
+<CandidateQueue state={state} save={save} />
+<section className="technical-section"><div className="technical-section-head"><div><p className="eyebrow">AFSTANDSCORRECTIES</p><h2>Waar pas je echte kilometers aan?</h2></div></div><p>Open een werknemer of locatie en klap bij de juiste route <strong>‘Echte afstand corrigeren’</strong> open. Mapbox blijft als bewijs bewaard; HR-correcties en herstelacties krijgen een afzonderlijke historie.</p></section>
+</>
+}
 
 const tariffTypes = {
   standard: { title: 'Gewone auto', short: 'Standaard', description: 'Dagbedrag volgens enkele woon-werkafstand.', action: 'car_tariff', stateKey: 'car_tariffs', tone: 'green' },
@@ -1019,20 +1210,32 @@ function Settings({ state, save }) {
 </>
 }
 
-function App() {
+function App({ auth }) {
   const [state, setState] = useState(null), [matching, setMatching] = useState(null), [page, setPage] = useState('overview')
+  const [analytics, setAnalytics] = useState(null), [analyticsLoading, setAnalyticsLoading] = useState(false), [analyticsError, setAnalyticsError] = useState('')
   const [workerId, setWorkerId] = useState(null), [locationKey, setLocationKey] = useState(null)
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('')
   const data = useMemo(() => deriveDashboard(state, matching), [state, matching])
 
   async function load(messageAfter = '') { setError(''); const response = await fetch('/api/state'); if (!response.ok) throw new Error('Backend niet bereikbaar. Start eerst scripts/manage_transport.py.'); const next = await response.json(); setState(next); setMatching(next.matching); if (messageAfter) setMessage(messageAfter) }
   useEffect(() => { load().catch(reason => setError(reason.message)) }, [])
+  useEffect(() => {
+    if (page !== 'analytics' || !state) return
+    let active = true
+    setAnalyticsLoading(true); setAnalyticsError('')
+    fetch('/api/analytics').then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error || 'Analytics laden mislukt.'); return body })
+      .then(body => { if (active) setAnalytics(body) })
+      .catch(reason => { if (active) setAnalyticsError(reason.message) })
+      .finally(() => { if (active) setAnalyticsLoading(false) })
+    return () => { active = false }
+  }, [page, state?.revision])
   useEffect(() => { if (busy || (!message && !error)) return; const timer = setTimeout(() => { setMessage(''); setError('') }, error ? 9000 : 6500); return () => clearTimeout(timer) }, [busy, message, error])
   async function save(action, payload) { setBusy(true); setError(''); setMessage('Wijziging opslaan en maand herberekenen…'); try { const response = await fetch(`/api/action/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: payload }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Opslaan mislukt.'); setMessage('Wijziging opgeslagen. Actuele gegevens laden…'); await load('Opgeslagen. De actuele maand is opnieuw gecontroleerd.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   async function refresh() { setBusy(true); setError(''); setMessage('Gegevens vernieuwen…'); try { await load('Gegevens zijn vernieuwd.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   async function chooseRun(runId) { setBusy(true); setError(''); setMessage('Geselecteerde maand laden…'); try { const response = await fetch(`/api/matching/run?id=${runId}`); if (!response.ok) throw new Error('Maand laden mislukt.'); const selected = await response.json(); setMatching(selected); setState(current => ({ ...current, matching: selected })); setMessage('Maand geladen.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   async function upload() { const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx'; input.onchange = async () => { const file = input.files?.[0]; if (!file) return; if (file.size > 5_000_000) return setError('Het bestand is groter dan 5 MB.'); setBusy(true); setError(''); setMessage('Export wordt verwerkt…'); try { const content = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('Bestand lezen mislukt.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file) }); const response = await fetch('/api/action/planet_upload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ revision: state.revision, data: { filename: file.name, content } }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Upload mislukt.'); await load('Pl@net-export verwerkt.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }; input.click() }
   async function exportPayroll() { setBusy(true); setError(''); setMessage('Accerta-export wordt gemaakt…'); try { const response = await fetch('/api/payroll/export', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ run_id: matching.run_id }) }); if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Export mislukt.') } const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `VERVOER-AFWIJKENDE-LONEN-${matching.month}.xlsx`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setMessage('Accerta-export gedownload.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
+  async function exportRouteControl() { setBusy(true); setError(''); setMessage('Routecontrolebestand wordt gemaakt…'); try { const response = await fetch(`/api/routing/export?run_id=${matching.run_id}&csrf=${encodeURIComponent(state.csrf)}`); if (!response.ok) { const result = await response.json().catch(() => ({})); throw new Error(result.error || 'Routecontrole exporteren mislukt.') } const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `WERKNEMERSAFSTANDEN-CONTROLE-${matching.month}.xlsx`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setMessage('Routecontrolebestand gedownload.') } catch (reason) { setError(reason.message); setMessage('') } finally { setBusy(false) } }
   function resolveAction() { setPage('actions'); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   function showEmployee(id) { setWorkerId(id); setPage('employees') }
   if (!state) return <main className="loading">
@@ -1051,16 +1254,28 @@ function App() {
 </div>
 </div>
 <nav>{nav.map(([id, label]) => <button className={page === id ? 'active' : ''} onClick={() => setPage(id)} key={id}>{label}{id === 'actions' && data.actions.length ? <span>{data.actions.length}</span> : null}</button>)}</nav>
-<button className="legacy settings-shortcut" onClick={() => setPage('settings')}>Tarieven beheren →</button>
+{auth.enabled ? <div className="signed-in-user"><span>{auth.user?.name?.split(' ').map(part => part[0]).join('').slice(0, 2) || 'MS'}</span><div><strong>{auth.user?.name}</strong><small>{auth.user?.username}</small></div><button onClick={() => window.location.assign('/api/auth/logout')}>Afmelden</button></div> : <button className="legacy settings-shortcut" onClick={() => setPage('settings')}>Tarieven beheren →</button>}
 </aside>
 <main className="content">
 <div className="toolbar">
 <MonthPicker state={state} matching={matching} onChange={chooseRun} />
 <button className="text-button" disabled={busy} onClick={upload}>＋ Nieuwe export</button>
 <button className="text-button" disabled={busy} onClick={refresh}>{busy && message.startsWith('Gegevens') ? 'Bezig…' : '↻ Vernieuwen'}</button>
-</div>{page === 'overview' && <Overview data={data} onUpload={upload} onExport={exportPayroll} onResolve={resolveAction} busy={busy} />}{page === 'actions' && <ActionCenter state={state} matching={matching} data={data} save={save} onEmployee={showEmployee} />}{page === 'review' && <MonthReview matching={matching} save={save} />}{page === 'employees' && <Employees state={state} onSelect={setWorkerId} />}{page === 'locations' && <Locations state={state} onSelect={setLocationKey} />}{page === 'settings' && <Settings state={state} save={save} />}</main>{workerId && <WorkerDialog workerId={workerId} state={state} onClose={() => setWorkerId(null)} save={save} />}{locationKey && <LocationDialog locationKey={locationKey} state={state} onClose={() => setLocationKey(null)} save={save} />}{busy && <div className="activity-shield" role="status" aria-live="assertive"><div className="activity-toast busy"><div className="loader small" /><div><strong>{message || 'Even geduld…'}</strong><span>Sluit dit venster niet tijdens de verwerking.</span></div></div></div>}{!busy && error && <div className="activity-toast error" role="alert"><b>!</b><div><strong>Actie mislukt</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Melding sluiten">×</button></div>}{!busy && message && <div className="activity-toast success" role="status"><b>✓</b><div><strong>Gelukt</strong><span>{message}</span></div><button onClick={() => setMessage('')} aria-label="Melding sluiten">×</button></div>}</div>
+</div>{page === 'overview' && <Overview data={data} onUpload={upload} onExport={exportPayroll} onResolve={resolveAction} busy={busy} />}{page === 'actions' && <ActionCenter state={state} matching={matching} data={data} save={save} onEmployee={showEmployee} />}{page === 'review' && <MonthReview matching={matching} save={save} />}{page === 'analytics' && <Analytics analytics={analytics} month={matching?.month} loading={analyticsLoading} error={analyticsError} />}{page === 'employees' && <Employees state={state} onSelect={setWorkerId} />}{page === 'locations' && <Locations state={state} onSelect={setLocationKey} />}{page === 'technical' && <TechnicalManagement state={state} save={save} onRouteExport={exportRouteControl} busy={busy} />}{page === 'settings' && <Settings state={state} save={save} />}</main>{workerId && <WorkerDialog workerId={workerId} state={state} onClose={() => setWorkerId(null)} save={save} />}{locationKey && <LocationDialog locationKey={locationKey} state={state} onClose={() => setLocationKey(null)} save={save} />}{busy && <div className="activity-shield" role="status" aria-live="assertive"><div className="activity-toast busy"><div className="loader small" /><div><strong>{message || 'Even geduld…'}</strong><span>Sluit dit venster niet tijdens de verwerking.</span></div></div></div>}{!busy && error && <div className="activity-toast error" role="alert"><b>!</b><div><strong>Actie mislukt</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Melding sluiten">×</button></div>}{!busy && message && <div className="activity-toast success" role="status"><b>✓</b><div><strong>Gelukt</strong><span>{message}</span></div><button onClick={() => setMessage('')} aria-label="Melding sluiten">×</button></div>}</div>
+}
+
+function AuthGate() {
+  const [auth, setAuth] = useState(null)
+  const [error, setError] = useState('')
+  const [loginBusy, setLoginBusy] = useState(false)
+  const check = () => { setError(''); fetch('/api/auth/status').then(async response => { if (!response.ok) throw new Error('Authenticatieservice niet bereikbaar.'); return response.json() }).then(setAuth).catch(reason => setError(reason.message)) }
+  const localLogin = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); setLoginBusy(true); setError(''); try { const response = await fetch('/api/auth/local-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Aanmelden mislukt.'); check() } catch (reason) { setError(reason.message) } finally { setLoginBusy(false) } }
+  useEffect(check, [])
+  if (!auth) return <main className="login-page"><div className="login-card"><img src="/icts-belgium.png" alt="ICTS Belgium" /><div className="loader" /><h1>HR Vervoerskosten</h1><p>{error || 'Beveiliging controleren…'}</p>{error && <button className="secondary" onClick={check}>Opnieuw proberen</button>}</div></main>
+  if (auth.enabled && !auth.authenticated) return <main className="login-page"><div className="login-card"><img src="/icts-belgium.png" alt="ICTS Belgium" /><p className="eyebrow">BEVEILIGDE HR-OMGEVING</p><h1>Welkom</h1>{auth.provider === 'microsoft' ? <><p>Meld je aan met je ICTS Microsoft-account. De applicatie bewaart geen wachtwoorden.</p><button className="microsoft-login" onClick={() => window.location.assign('/api/auth/login')}><span aria-hidden="true"><i /><i /><i /><i /></span>Aanmelden met Microsoft</button>{auth.required_role && <small>Toegang vereist de rol <strong>{auth.required_role}</strong>.</small>}</> : <><p>Meld je aan met het tijdelijke lokale beheeraccount. Het wachtwoord wordt uitsluitend als Argon2id-hash gecontroleerd.</p><form className="local-login-form" onSubmit={localLogin}><Field label="Gebruikersnaam"><input name="username" autoComplete="username" required autoFocus /></Field><Field label="Wachtwoord"><input name="password" type="password" autoComplete="current-password" required /></Field>{error && <div className="login-error" role="alert">{error}</div>}<button className="primary" disabled={loginBusy}>{loginBusy ? 'Controleren…' : 'Aanmelden'}</button></form></>}</div></main>
+  return <App auth={auth} />
 }
 
 createRoot(document.getElementById('root')).render(<React.StrictMode>
-<App />
+<AuthGate />
 </React.StrictMode>)

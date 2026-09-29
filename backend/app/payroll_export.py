@@ -145,46 +145,51 @@ def _remove_informational_sheet(source):
     workbook_path = 'xl/workbook.xml'
     relationships_path = 'xl/_rels/workbook.xml.rels'
     content_types_path = '[Content_Types].xml'
-    workbook = ElementTree.fromstring(source.read(workbook_path))
-    namespace = workbook.tag.partition('}')[0] + '}'
-    sheets = workbook.find(namespace + 'sheets')
-    relation_key = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
-    matches = [sheet for sheet in sheets if sheet.attrib.get('name') == REMOVED_SHEET]
-    if len(matches) != 1 or not matches[0].attrib.get(relation_key):
+    workbook_xml = source.read(workbook_path)
+    sheet_pattern = re.compile(rb'<sheet\b[^>]*\bname="' + re.escape(REMOVED_SHEET.encode()) + rb'"[^>]*/>')
+    sheet_matches = list(sheet_pattern.finditer(workbook_xml))
+    relation = re.search(rb'\br:id="([^"]+)"', sheet_matches[0].group(0)) if len(sheet_matches) == 1 else None
+    if not relation:
         raise ValueError('Het informatieve Accerta-tabblad kan niet veilig worden verwijderd.')
-    removed = matches[0]
-    relation_id = removed.attrib[relation_key]
-    sheets.remove(removed)
+    relation_id = relation.group(1)
+    workbook_xml = sheet_pattern.sub(b'', workbook_xml, count=1)
+    workbook_xml = re.sub(rb'<definedName\b[^>]*\blocalSheetId="1"[^>]*>.*?</definedName>', b'', workbook_xml,
+                          flags=re.DOTALL)
+    workbook_xml = workbook_xml.replace(b'<definedNames></definedNames>', b'').replace(b'<definedNames/>', b'')
 
-    defined_names = workbook.find(namespace + 'definedNames')
-    if defined_names is not None:
-        for defined_name in list(defined_names):
-            if defined_name.attrib.get('localSheetId') == '1' or REMOVED_SHEET.strip() in (defined_name.text or ''):
-                defined_names.remove(defined_name)
-        if not list(defined_names):
-            workbook.remove(defined_names)
-
-    relationships = ElementTree.fromstring(source.read(relationships_path))
-    related = [item for item in relationships if item.attrib.get('Id') == relation_id]
-    if len(related) != 1:
+    relationships_xml = source.read(relationships_path)
+    relationship_pattern = re.compile(rb'<Relationship\b(?=[^>]*\bId="' + re.escape(relation_id) + rb'")[^>]*/>')
+    relationship_matches = list(relationship_pattern.finditer(relationships_xml))
+    if len(relationship_matches) != 1:
         raise ValueError('De verwijzing naar het informatieve Accerta-tabblad is niet eenduidig.')
-    target = related[0].attrib.get('Target', '')
-    relationships.remove(related[0])
-    sheet_path = normpath(target.lstrip('/') if target.startswith('/xl/') else f'xl/{target}')
+    target_match = re.search(rb'\bTarget="([^"]+)"', relationship_matches[0].group(0))
+    target_value = target_match.group(1).decode() if target_match else ''
+    relationships_xml = relationship_pattern.sub(b'', relationships_xml, count=1)
+    sheet_path = normpath(target_value.lstrip('/') if target_value.startswith('/xl/') else f'xl/{target_value}')
     if not sheet_path.startswith('xl/worksheets/') or sheet_path not in source.namelist():
         raise ValueError('Het informatieve Accerta-tabblad heeft een onverwachte pakketstructuur.')
 
-    content_types = ElementTree.fromstring(source.read(content_types_path))
-    overrides = [item for item in content_types if item.attrib.get('PartName') == f'/{sheet_path}']
-    if len(overrides) != 1:
+    content_types_xml = source.read(content_types_path)
+    content_pattern = re.compile(rb'<Override\b(?=[^>]*\bPartName="/' + re.escape(sheet_path.encode()) + rb'")[^>]*/>')
+    if len(content_pattern.findall(content_types_xml)) != 1:
         raise ValueError('Het informatieve Accerta-tabblad heeft geen eenduidig inhoudstype.')
-    content_types.remove(overrides[0])
+    content_types_xml = content_pattern.sub(b'', content_types_xml, count=1)
     removed_parts = {sheet_path, f"{sheet_path.rsplit('/', 1)[0]}/_rels/{sheet_path.rsplit('/', 1)[1]}.rels"}
     replacements = {
-        workbook_path: ElementTree.tostring(workbook, encoding='utf-8', xml_declaration=True),
-        relationships_path: ElementTree.tostring(relationships, encoding='utf-8', xml_declaration=True),
-        content_types_path: ElementTree.tostring(content_types, encoding='utf-8', xml_declaration=True),
+        workbook_path: workbook_xml,
+        relationships_path: relationships_xml,
+        content_types_path: content_types_xml,
     }
+    app_path = 'docProps/app.xml'
+    if app_path in source.namelist():
+        app_xml = source.read(app_path)
+        title_pattern = re.compile(rb'<vt:lpstr>' + re.escape(REMOVED_SHEET.encode()) + rb'</vt:lpstr>')
+        if title_pattern.search(app_xml):
+            app_xml = title_pattern.sub(b'', app_xml, count=1)
+            app_xml = re.sub(rb'(<TitlesOfParts><vt:vector\s+size=")2("\s+baseType="lpstr">)', rb'\g<1>1\g<2>', app_xml, count=1)
+            app_xml = re.sub(rb'(<HeadingPairs>.*?<vt:lpstr>Worksheets</vt:lpstr>.*?<vt:i4>)2(</vt:i4>)',
+                             rb'\g<1>1\g<2>', app_xml, count=1, flags=re.DOTALL)
+            replacements[app_path] = app_xml
     return removed_parts, replacements
 
 

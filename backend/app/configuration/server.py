@@ -8,6 +8,8 @@ from urllib.parse import urlsplit,parse_qs
 
 
 def make_server(store,port=8765):
+    from app.microsoft_auth import MicrosoftAuth
+    auth=MicrosoftAuth()
     if hasattr(store,'get_route_plan'):
         from app.automatic_routes import trigger
         trigger(store)
@@ -18,16 +20,25 @@ def make_server(store,port=8765):
         def log_message(self,*args):
             pass  # Never log names, body, source paths or configuration values.
 
-        def reply(self,status,body,content_type='application/json',filename=None):
+        def reply(self,status,body,content_type='application/json',filename=None,cookie=None):
             encoded=body if isinstance(body,bytes) else body.encode('utf-8')
             self.send_response(status)
             self.send_header('Content-Type',content_type if isinstance(body,bytes) else content_type+'; charset=utf-8')
             self.send_header('Content-Length',str(len(encoded)))
             if filename:self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
+            if cookie:self.send_header('Set-Cookie',cookie)
             self.send_header('Cache-Control','no-store')
             self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             self.end_headers(); self.wfile.write(encoded)
+
+        def redirect(self,location,cookie=None):
+            self.send_response(302)
+            self.send_header('Location',location)
+            if cookie:self.send_header('Set-Cookie',cookie)
+            self.send_header('Cache-Control','no-store')
+            self.send_header('Content-Length','0')
+            self.end_headers()
 
         def host_ok(self):
             port=self.server.server_port
@@ -37,6 +48,23 @@ def make_server(store,port=8765):
 
         def do_GET(self):
             if not self.host_ok():return self.reply(403,'{}')
+            path=urlsplit(self.path).path
+            if path=='/api/auth/status':
+                return self.reply(200,json.dumps(auth.public_status(self.headers.get('Cookie')),ensure_ascii=False))
+            if path=='/api/auth/login':
+                try:
+                    location,cookie=auth.begin();return self.redirect(location,cookie)
+                except (ValueError,RuntimeError) as error:return self.reply(503,json.dumps({'error':str(error)},ensure_ascii=False))
+            if path=='/api/auth/callback':
+                try:
+                    cookie=auth.finish(self.headers.get('Cookie'),{key:values[0] for key,values in parse_qs(urlsplit(self.path).query).items()})
+                    return self.redirect('/',cookie)
+                except ValueError as error:return self.reply(401,json.dumps({'error':str(error)},ensure_ascii=False))
+            if path=='/api/auth/logout':
+                if not auth.enabled:return self.redirect('/')
+                location,cookie=auth.logout(self.headers.get('Cookie'));return self.redirect(location,cookie)
+            if path.startswith('/api/') and not auth.user(self.headers.get('Cookie')):
+                return self.reply(401,'{"error":"Meld je aan om verder te gaan."}')
             if self.path=='/api/state':
                 return self.reply(200,json.dumps({**store.snapshot(),'csrf':token},ensure_ascii=False))
             if urlsplit(self.path).path=='/api/revision':
@@ -72,6 +100,9 @@ def make_server(store,port=8765):
                     run=int(parse_qs(urlsplit(self.path).query).get('id',[''])[0])
                     return self.reply(200,json.dumps(store.get_matching(run),ensure_ascii=False))
                 except ValueError:return self.reply(400,'{"error":"Onbekende maandverwerking."}')
+            if urlsplit(self.path).path=='/api/analytics' and hasattr(store,'get_analytics'):
+                try:return self.reply(200,json.dumps(store.get_analytics(),ensure_ascii=False))
+                except ValueError as error:return self.reply(400,json.dumps({'error':str(error)},ensure_ascii=False))
             files={'/':('index.html','text/html'),'/app.js':('app.js','text/javascript'),'/style.css':('style.css','text/css')}
             if store.snapshot().get('view')=='routes':
                 files['/']=('routes.html','text/html')
@@ -81,7 +112,21 @@ def make_server(store,port=8765):
             self.reply(200,(static/name).read_text(encoding='utf-8'),mime)
 
         def do_POST(self):
-            if not self.host_ok() or not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),token):
+            if not self.host_ok():return self.reply(403,'{}')
+            if urlsplit(self.path).path=='/api/auth/local-login':
+                if self.headers.get('Content-Type')!='application/json':return self.reply(415,'{}')
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if size<=0 or size>10_000:return self.reply(413,'{}')
+                    payload=json.loads(self.rfile.read(size))
+                    if not isinstance(payload,dict):raise ValueError
+                    cookie=auth.local_login(payload.get('username'),payload.get('password'),self.client_address[0])
+                    return self.reply(200,'{"ok":true}',cookie=cookie)
+                except PermissionError as error:return self.reply(429,json.dumps({'error':str(error)},ensure_ascii=False))
+                except (ValueError,TypeError,RuntimeError):return self.reply(401,'{"error":"Gebruikersnaam of wachtwoord is ongeldig."}')
+            if auth.enabled and not auth.user(self.headers.get('Cookie')):
+                return self.reply(401,'{"error":"Meld je aan om verder te gaan."}')
+            if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),token):
                 return self.reply(403,'{}')
             if self.headers.get('Content-Type')!='application/json':return self.reply(415,'{}')
             try:

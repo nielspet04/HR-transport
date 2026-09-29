@@ -80,6 +80,10 @@ def test_replaces_examples_and_preserves_template_structure_and_styles():
     assert sheet.auto_filter.ref == f'A1:XFD{sheet.max_row}'
     with ZipFile(BytesIO(original)) as source, ZipFile(BytesIO(result)) as exported:
         assert 'xl/worksheets/sheet2.xml' not in exported.namelist()
+        original_workbook = source.read('xl/workbook.xml')
+        removed_tag = b'<sheet name="LIST NIET UITBETALEN " sheetId="2" state="visible" r:id="rId2" />'
+        assert removed_tag in original_workbook
+        assert exported.read('xl/workbook.xml') == original_workbook.replace(removed_tag, b'')
         changed = {'[Content_Types].xml', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels',
                    'xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml'}
         assert all(source.read(name) == exported.read(name) for name in source.namelist()
