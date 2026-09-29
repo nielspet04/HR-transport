@@ -790,7 +790,7 @@ function RouteMapModal({ route, csrf, onClose }) {
   </div>
 }
 
-function WorkerDialogBase({ workerId, state, onClose, save }) {
+function WorkerDialogBase({ workerId, state, onClose, save, children }) {
   const worker = state.workers.find(item => item.id === workerId)
   if (!worker) return null
   const address = latest(state.addresses || [], item => item.worker_id === workerId)
@@ -895,6 +895,7 @@ function WorkerDialogBase({ workerId, state, onClose, save }) {
 </form>
 </details>
 </div>
+{children}
 </section>
 </div>
 }
@@ -905,7 +906,7 @@ function WorkerDialog({ workerId, state, onClose, save }) {
   const routes = state.routes.filter(route => route.worker_id === workerId)
   const maps = (state.route_maps || []).filter(route => route.worker_id === workerId)
   return <>
-<WorkerDialogBase workerId={workerId} state={state} onClose={onClose} save={save} />
+<WorkerDialogBase workerId={workerId} state={state} onClose={onClose} save={save}>
 <section className="route-map-dock" aria-label="Routekaarten werknemer">
 <div>
 <strong>Routekaarten</strong>
@@ -920,7 +921,8 @@ function WorkerDialog({ workerId, state, onClose, save }) {
 <b>{map.kms} km</b>
 <em>Kaart →</em>
 </button><RouteCorrection routeId={map.route_id} workerId={workerId} state={state} save={save} /></article> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden.</p>}</div>
-</section>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
+</section>
+</WorkerDialogBase>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
 }
 
 function Employees({ state, onSelect }) {
@@ -944,7 +946,7 @@ function Employees({ state, onSelect }) {
 </>
 }
 
-function LocationDialogBase({ locationKey, state, onClose, save }) {
+function LocationDialogBase({ locationKey, state, onClose, save, children }) {
   const location = state.physical_locations.find(item => item.key === locationKey)
   if (!location) return null
   const address = latest(state.location_addresses || [], item => item.location_key === location.key)
@@ -985,6 +987,7 @@ function LocationDialogBase({ locationKey, state, onClose, save }) {
 <button className="secondary">Adres opslaan</button>
 </form>
 </details>
+{children}
 </section>
 </div>
 }
@@ -994,7 +997,7 @@ function LocationDialog({ locationKey, state, onClose, save }) {
   const location = state.physical_locations.find(item => item.key === locationKey)
   const maps = (state.route_maps || []).filter(route => route.location_key === locationKey)
   return <>
-<LocationDialogBase locationKey={locationKey} state={state} onClose={onClose} save={save} />
+<LocationDialogBase locationKey={locationKey} state={state} onClose={onClose} save={save}>
 <section className="route-map-dock" aria-label="Routekaarten locatie">
 <div>
 <strong>Routes naar {location?.name}</strong>
@@ -1009,7 +1012,8 @@ function LocationDialog({ locationKey, state, onClose, save }) {
 <b>{map.kms} km</b>
 <em>Kaart →</em>
 </button><RouteCorrection routeId={map.route_id} workerId={map.worker_id} state={state} save={save} /></article> })}{!maps.length && <p>Nog geen opgeslagen routeafstanden naar deze locatie.</p>}</div>
-</section>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
+</section>
+</LocationDialogBase>{selectedMap && <RouteMapModal route={selectedMap} csrf={state.csrf} revision={state.revision} onClose={() => setSelectedMap(null)} />}</>
 }
 
 function Locations({ state, onSelect }) { return <>
