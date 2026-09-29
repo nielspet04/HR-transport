@@ -361,6 +361,8 @@ class RouteStore(Store):
         from app.distances import display_route
         from app.calculation import calculate_month
         payload=json.loads(row['payload'])
+        from app.event_locations import refresh_actions as refresh_event_actions
+        refresh_event_actions(payload)
         if db is not None:
             from app.shift_location import apply_choices
             apply_choices(db,config,payload)

@@ -10,6 +10,26 @@ from app.shift_location import movement_key
 from app.transport_defaults import MODES
 
 
+def refresh_actions(payload):
+    """Rebuild per-shift actions for runs saved before Event ad hoc was special."""
+    retained=[item for item in payload.get('locations',[]) if not is_event_ad_hoc(item.get('customer'))]
+    actions=[]
+    for movement in payload.get('movements',[]):
+        for shift in movement.get('source_shifts',[]):
+            if not is_event_ad_hoc(shift.get('customer')):
+                continue
+            actions.append({'customer':shift['customer'],'physical_location':'Event ad hoc',
+                'reference_location':movement.get('location'),
+                'status':movement.get('location_status','UNMATCHED_LOCATION'),
+                'movement_id':movement['id'],'is_ad_hoc':True,'day':movement['day'],
+                'start':shift.get('start'),'end':shift.get('end'),
+                'end_day_offset':shift.get('end_day_offset'),
+                'planet_id':movement['planet_id'],'source_row':shift.get('row')})
+    payload['locations']=sorted(retained+actions,
+        key=lambda item:(item.get('customer') or '',item.get('day') or '',item.get('start') or '',item.get('source_row') or 0))
+    return payload
+
+
 def save(store, data, revision):
     run_id=data.get('run_id');movement_id=data.get('movement_id');choice=data.get('choice')
     if type(run_id) is not int or type(movement_id) is not int:

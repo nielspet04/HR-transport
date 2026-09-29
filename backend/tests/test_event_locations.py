@@ -1,6 +1,7 @@
 import json
 
 from app.configuration.routes import RouteStore
+from app.event_locations import refresh_actions
 
 
 def prepared(tmp_path,monkeypatch):
@@ -30,6 +31,15 @@ def prepared(tmp_path,monkeypatch):
         run=db.execute('INSERT INTO matching_runs(month,created_at,source_path,payload) VALUES(?,?,?,?)',
             ('2026-09','test','unused.xlsx',json.dumps(payload))).lastrowid
     return store,run,worker
+
+
+def test_legacy_single_location_entry_is_rebuilt_as_two_event_actions(tmp_path,monkeypatch):
+    store,run,_=prepared(tmp_path,monkeypatch)
+    with store.connect() as db:
+        payload=json.loads(db.execute('SELECT payload FROM matching_runs WHERE id=?',(run,)).fetchone()[0])
+    payload['locations']=payload['locations'][:1]
+    refreshed=refresh_actions(payload)
+    assert [(item['movement_id'],item['source_row']) for item in refreshed['locations']]==[(1,2),(2,3)]
 
 
 def test_existing_location_resolves_only_selected_event_shift(tmp_path,monkeypatch):
